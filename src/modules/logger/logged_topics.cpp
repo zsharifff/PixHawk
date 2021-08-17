@@ -314,9 +314,6 @@ void LoggedTopics::add_debug_topics()
 
 void LoggedTopics::add_estimator_replay_topics()
 {
-	// for estimator replay (need to be at full rate)
-	add_topic("ekf2_timestamps");
-
 	// current EKF2 subscriptions
 	add_topic("airspeed");
 	add_topic("optical_flow");

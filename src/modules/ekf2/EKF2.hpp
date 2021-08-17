@@ -67,7 +67,6 @@
 #include <uORB/topics/airspeed.h>
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/distance_sensor.h>
-#include <uORB/topics/ekf2_timestamps.h>
 #include <uORB/topics/estimator_bias.h>
 #include <uORB/topics/estimator_bias3d.h>
 #include <uORB/topics/estimator_event_flags.h>
@@ -103,7 +102,7 @@ class EKF2 final : public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
 	EKF2() = delete;
-	EKF2(bool multi_mode, const px4::wq_config_t &config, bool replay_mode);
+	EKF2(bool multi_mode, const px4::wq_config_t &config);
 	~EKF2() override;
 
 	/** @see ModuleBase */
@@ -163,15 +162,15 @@ private:
 	void PublishWindEstimate(const hrt_abstime &timestamp);
 	void PublishYawEstimatorStatus(const hrt_abstime &timestamp);
 
-	void UpdateAirspeedSample(ekf2_timestamps_s &ekf2_timestamps);
-	void UpdateAuxVelSample(ekf2_timestamps_s &ekf2_timestamps);
-	void UpdateBaroSample(ekf2_timestamps_s &ekf2_timestamps);
-	bool UpdateExtVisionSample(ekf2_timestamps_s &ekf2_timestamps);
-	bool UpdateFlowSample(ekf2_timestamps_s &ekf2_timestamps);
-	void UpdateGpsSample(ekf2_timestamps_s &ekf2_timestamps);
-	void UpdateMagSample(ekf2_timestamps_s &ekf2_timestamps);
-	void UpdateRangeSample(ekf2_timestamps_s &ekf2_timestamps);
-	void UpdateSystemFlagsSample(ekf2_timestamps_s &ekf2_timestamps);
+	void UpdateAirspeedSample();
+	void UpdateAuxVelSample();
+	void UpdateBaroSample();
+	bool UpdateExtVisionSample();
+	bool UpdateFlowSample();
+	void UpdateGpsSample();
+	void UpdateMagSample();
+	void UpdateRangeSample();
+	void UpdateSystemFlagsSample();
 
 	// Used to check, save and use learned accel/gyro/mag biases
 	struct InFlightCalibration {
@@ -210,7 +209,6 @@ private:
 
 	static constexpr float sq(float x) { return x * x; };
 
-	const bool _replay_mode{false};			///< true when we use replay data from a log
 	const bool _multi_mode;
 	int _instance{0};
 
@@ -337,7 +335,6 @@ private:
 	uint32_t _filter_warning_event_changes{0};
 	uint32_t _filter_information_event_changes{0};
 
-	uORB::PublicationMulti<ekf2_timestamps_s>            _ekf2_timestamps_pub{ORB_ID(ekf2_timestamps)};
 	uORB::PublicationMulti<estimator_bias_s>             _estimator_baro_bias_pub{ORB_ID(estimator_baro_bias)};
 	uORB::PublicationMulti<estimator_bias_s>             _estimator_gnss_hgt_bias_pub{ORB_ID(estimator_gnss_hgt_bias)};
 	uORB::PublicationMulti<estimator_bias_s>             _estimator_rng_hgt_bias_pub{ORB_ID(estimator_rng_hgt_bias)};
