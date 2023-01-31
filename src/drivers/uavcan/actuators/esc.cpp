@@ -68,7 +68,7 @@ UavcanEscController::init()
 }
 
 void
-UavcanEscController::update_outputs(bool stop_motors, uint16_t outputs[MAX_ACTUATORS], unsigned num_outputs)
+UavcanEscController::update_outputs(bool stop_motors, float outputs[MAX_ACTUATORS], unsigned num_outputs)
 {
 	/*
 	 * Rate limiting - we don't want to congest the bus
@@ -88,7 +88,7 @@ UavcanEscController::update_outputs(bool stop_motors, uint16_t outputs[MAX_ACTUA
 	uavcan::equipment::esc::RawCommand msg;
 
 	for (unsigned i = 0; i < num_outputs; i++) {
-		if (stop_motors || outputs[i] == DISARMED_OUTPUT_VALUE) {
+		if (stop_motors || !PX4_ISFINITE(outputs[i]) || (outputs[i] >= DISARMED_OUTPUT_VALUE)) {
 			msg.cmd.push_back(static_cast<unsigned>(0));
 
 		} else {

@@ -90,7 +90,7 @@ MixingOutput::MixingOutput(const char *param_prefix, uint8_t max_num_outputs, Ou
 	initParamHandles();
 
 	for (unsigned i = 0; i < MAX_ACTUATORS; i++) {
-		_failsafe_value[i] = UINT16_MAX;
+		_failsafe_value[i] = NAN;
 	}
 
 	updateParams();
@@ -141,9 +141,9 @@ void MixingOutput::printStatus() const
 	PX4_INFO_RAW("Channel Configuration:\n");
 
 	for (unsigned i = 0; i < _max_num_outputs; i++) {
-		PX4_INFO_RAW("Channel %i: func: %3i, value: %i, failsafe: %d, disarmed: %d, min: %d, max: %d\n", i,
-			     (int)_function_assignment[i], _current_output_value[i],
-			     actualFailsafeValue(i), _disarmed_value[i], _min_value[i], _max_value[i]);
+		PX4_INFO_RAW("Channel %i: func: %3i, value: %.1f, failsafe: %.1f, disarmed: %.1f, min: %.1f, max: %.1f\n", i,
+			     (int)_function_assignment[i], (double)_current_output_value[i],
+			     (double)actualFailsafeValue(i), (double)_disarmed_value[i], (double)_min_value[i], (double)_max_value[i]);
 	}
 }
 
@@ -164,26 +164,28 @@ void MixingOutput::updateParams()
 			// we set _function_assignment[i] later to ensure _functions[i] is updated at the same time
 		}
 
-		if (_param_handles[i].disarmed != PARAM_INVALID && param_get(_param_handles[i].disarmed, &val) == 0) {
-			_disarmed_value[i] = val;
+		float fval;
+
+		if (_param_handles[i].disarmed != PARAM_INVALID && param_get(_param_handles[i].disarmed, &fval) == 0) {
+			_disarmed_value[i] = fval;
 		}
 
-		if (_param_handles[i].min != PARAM_INVALID && param_get(_param_handles[i].min, &val) == 0) {
-			_min_value[i] = val;
+		if (_param_handles[i].min != PARAM_INVALID && param_get(_param_handles[i].min, &fval) == 0) {
+			_min_value[i] = fval;
 		}
 
-		if (_param_handles[i].max != PARAM_INVALID && param_get(_param_handles[i].max, &val) == 0) {
-			_max_value[i] = val;
+		if (_param_handles[i].max != PARAM_INVALID && param_get(_param_handles[i].max, &fval) == 0) {
+			_max_value[i] = fval;
 		}
 
 		if (_min_value[i] > _max_value[i]) {
-			uint16_t tmp = _min_value[i];
+			float tmp = _min_value[i];
 			_min_value[i] = _max_value[i];
 			_max_value[i] = tmp;
 		}
 
-		if (_param_handles[i].failsafe != PARAM_INVALID && param_get(_param_handles[i].failsafe, &val) == 0) {
-			_failsafe_value[i] = val;
+		if (_param_handles[i].failsafe != PARAM_INVALID && param_get(_param_handles[i].failsafe, &fval) == 0) {
+			_failsafe_value[i] = fval;
 		}
 	}
 
@@ -363,7 +365,7 @@ void MixingOutput::setMaxTopicUpdateRate(unsigned max_topic_update_interval_us)
 	}
 }
 
-void MixingOutput::setAllMinValues(uint16_t value)
+void MixingOutput::setAllMinValues(float value)
 {
 	for (unsigned i = 0; i < MAX_ACTUATORS; i++) {
 		_param_handles[i].min = PARAM_INVALID;
@@ -371,7 +373,7 @@ void MixingOutput::setAllMinValues(uint16_t value)
 	}
 }
 
-void MixingOutput::setAllMaxValues(uint16_t value)
+void MixingOutput::setAllMaxValues(float value)
 {
 	for (unsigned i = 0; i < MAX_ACTUATORS; i++) {
 		_param_handles[i].max = PARAM_INVALID;
@@ -379,7 +381,7 @@ void MixingOutput::setAllMaxValues(uint16_t value)
 	}
 }
 
-void MixingOutput::setAllFailsafeValues(uint16_t value)
+void MixingOutput::setAllFailsafeValues(float value)
 {
 	for (unsigned i = 0; i < MAX_ACTUATORS; i++) {
 		_param_handles[i].failsafe = PARAM_INVALID;
@@ -387,7 +389,7 @@ void MixingOutput::setAllFailsafeValues(uint16_t value)
 	}
 }
 
-void MixingOutput::setAllDisarmedValues(uint16_t value)
+void MixingOutput::setAllDisarmedValues(float value)
 {
 	for (unsigned i = 0; i < MAX_ACTUATORS; i++) {
 		_param_handles[i].disarmed = PARAM_INVALID;
@@ -499,7 +501,7 @@ MixingOutput::limitAndUpdateOutputs(float outputs[MAX_ACTUATORS], bool has_updat
 	}
 }
 
-uint16_t MixingOutput::output_limit_calc_single(int i, float value) const
+float MixingOutput::output_limit_calc_single(int i, float value) const
 {
 	// check for invalid / disabled channels
 	if (!PX4_ISFINITE(value)) {
@@ -510,7 +512,7 @@ uint16_t MixingOutput::output_limit_calc_single(int i, float value) const
 		value = -1.f * value;
 	}
 
-	uint16_t effective_output = value * (_max_value[i] - _min_value[i]) / 2 + (_max_value[i] + _min_value[i]) / 2;
+	float effective_output = value * (_max_value[i] - _min_value[i]) / 2.f + (_max_value[i] + _min_value[i]) / 2.f;
 
 	// last line of defense against invalid inputs
 	return math::constrain(effective_output, _min_value[i], _max_value[i]);
@@ -597,14 +599,9 @@ MixingOutput::output_limit_calc(const bool armed, const int num_channels, const 
 		break;
 
 	case OutputLimitState::RAMP: {
-			hrt_abstime diff = hrt_elapsed_time(&_output_time_armed);
 
-			static constexpr int PROGRESS_INT_SCALING = 10000;
-			int progress = diff * PROGRESS_INT_SCALING / RAMP_TIME_US;
-
-			if (progress > PROGRESS_INT_SCALING) {
-				progress = PROGRESS_INT_SCALING;
-			}
+			const float progress = math::constrain(static_cast<float>(hrt_elapsed_time(&_output_time_armed) / RAMP_TIME_US), 0.f,
+							       1.f);
 
 			for (int i = 0; i < num_channels; i++) {
 
@@ -616,20 +613,20 @@ MixingOutput::output_limit_calc(const bool armed, const int num_channels, const 
 					continue;
 				}
 
-				uint16_t ramp_min_output;
+				float ramp_min_output;
 
 				/* if a disarmed output value was set, blend between disarmed and min */
 				if (_disarmed_value[i] > 0) {
 
 					/* safeguard against overflows */
-					auto disarmed = _disarmed_value[i];
+					float disarmed = _disarmed_value[i];
 
 					if (disarmed > _min_value[i]) {
 						disarmed = _min_value[i];
 					}
 
-					int disarmed_min_diff = _min_value[i] - disarmed;
-					ramp_min_output = disarmed + (disarmed_min_diff * progress) / PROGRESS_INT_SCALING;
+					float disarmed_min_diff = _min_value[i] - disarmed;
+					ramp_min_output = disarmed + (disarmed_min_diff * progress);
 
 				} else {
 					/* no disarmed output value set, choose min output */
@@ -640,8 +637,8 @@ MixingOutput::output_limit_calc(const bool armed, const int num_channels, const 
 					control_value = -1.f * control_value;
 				}
 
-				_current_output_value[i] = control_value * (_max_value[i] - ramp_min_output) / 2 + (_max_value[i] + ramp_min_output) /
-							   2;
+				_current_output_value[i] = control_value * (_max_value[i] - ramp_min_output) / 2.f +
+							   (_max_value[i] + ramp_min_output) / 2.f;
 
 				/* last line of defense against invalid inputs */
 				_current_output_value[i] = math::constrain(_current_output_value[i], ramp_min_output, _max_value[i]);
@@ -684,19 +681,18 @@ MixingOutput::updateLatencyPerfCounter(const actuator_outputs_s &actuator_output
 	}
 }
 
-uint16_t
+float
 MixingOutput::actualFailsafeValue(int index) const
 {
-	uint16_t value = 0;
+	float value = 0;
 
-	if (_failsafe_value[index] == UINT16_MAX) { // if set to default, use the one provided by the function
-		float default_failsafe = NAN;
+	if (!PX4_ISFINITE(_failsafe_value[index])) { // if set to default, use the one provided by the function
 
 		if (_functions[index]) {
-			default_failsafe = _functions[index]->defaultFailsafeValue(_function_assignment[index]);
-		}
+			float default_failsafe = _functions[index]->defaultFailsafeValue(_function_assignment[index]);
 
-		value = output_limit_calc_single(index, default_failsafe);
+			value = output_limit_calc_single(index, default_failsafe);
+		}
 
 	} else {
 		value = _failsafe_value[index];
