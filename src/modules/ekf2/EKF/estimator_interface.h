@@ -247,8 +247,6 @@ public:
 	const bool &global_origin_valid() const { return _NED_origin_initialised; }
 	const MapProjection &global_origin() const { return _pos_ref; }
 
-	void print_status();
-
 	float gps_horizontal_position_drift_rate_m_s() const { return _gps_horizontal_position_drift_rate_m_s; }
 	float gps_vertical_position_drift_rate_m_s() const { return _gps_vertical_position_drift_rate_m_s; }
 	float gps_filtered_horizontal_velocity_m_s() const { return _gps_filtered_horizontal_velocity_m_s; }
