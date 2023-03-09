@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2018-2021 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2018-2022 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,8 +33,9 @@
 
 #include "TAP_ESC.hpp"
 
+#include <px4_platform_common/sem.hpp>
+
 TAP_ESC::TAP_ESC(char const *const device, uint8_t channels_count):
-	CDev(TAP_ESC_DEVICE_PATH),
 	OutputModuleInterface(MODULE_NAME, px4::serial_port_to_wq(device)),
 	_mixing_output{"TAP_ESC", channels_count, *this, MixingOutput::SchedulingPolicy::Auto, true},
 	_channels_count(channels_count)
@@ -152,8 +153,7 @@ int TAP_ESC::init()
 		usleep(2000);
 	}
 
-	/* do regular cdev init */
-	return CDev::init();
+	return 0;
 }
 
 void TAP_ESC::send_esc_outputs(const uint16_t *pwm, const uint8_t motor_cnt)
@@ -288,6 +288,8 @@ bool TAP_ESC::updateOutputs(bool stop_motors, uint16_t outputs[MAX_ACTUATORS], u
 
 				if (feed_back_data.channelID < esc_status_s::CONNECTED_ESC_MAX) {
 					_esc_feedback.esc[feed_back_data.channelID].timestamp = hrt_absolute_time();
+					_esc_feedback.esc[feed_back_data.channelID].actuator_function = (uint8_t)_mixing_output.outputFunction(
+								feed_back_data.channelID);
 					_esc_feedback.esc[feed_back_data.channelID].esc_errorcount = 0;
 					_esc_feedback.esc[feed_back_data.channelID].esc_rpm = feed_back_data.speed;
 #if defined(ESC_HAVE_VOLTAGE_SENSOR)
@@ -402,38 +404,9 @@ void TAP_ESC::Run()
 	}
 
 	// check at end of cycle (updateSubscriptions() can potentially change to a different WorkQueue thread)
-	_mixing_output.updateSubscriptions(true, true);
+	_mixing_output.updateSubscriptions(true);
 
 	perf_end(_cycle_perf);
-}
-
-int TAP_ESC::ioctl(device::file_t *filp, int cmd, unsigned long arg)
-{
-	int ret = OK;
-
-	lock();
-
-	switch (cmd) {
-	case MIXERIOCRESET:
-		_mixing_output.resetMixerThreadSafe();
-		break;
-
-	case MIXERIOCLOADBUF: {
-			const char *buf = (const char *)arg;
-			unsigned buflen = strlen(buf);
-			ret = _mixing_output.loadMixerThreadSafe(buf, buflen);
-			break;
-		}
-
-
-	default:
-		ret = -ENOTTY;
-		break;
-	}
-
-	unlock();
-
-	return ret;
 }
 
 int TAP_ESC::task_spawn(int argc, char *argv[])
@@ -507,17 +480,22 @@ int TAP_ESC::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
+
 This module controls the TAP_ESC hardware via UART. It listens on the
 actuator_controls topics, does the mixing and writes the PWM outputs.
 
 ### Implementation
-Currently the module is implementd as a threaded version only, meaning that it
+
+Currently the module is implemented as a threaded version only, meaning that it
 runs in its own thread instead of on the work queue.
 
 ### Example
-The module is typically started with:
-tap_esc start -d /dev/ttyS2 -n <1-8>
 
+The module is typically started with:
+
+```
+tap_esc start -d /dev/ttyS2 -n <1-8>
+```
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("tap_esc", "driver");

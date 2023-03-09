@@ -63,7 +63,6 @@ public:
 	void set_device_id(uint32_t device_id);
 	bool set_offset(const matrix::Vector3f &offset);
 	void set_rotation(Rotation rotation);
-	void set_temperature(float temperature) { _temperature = temperature; };
 
 	bool calibrated() const { return (_device_id != 0) && (_calibration_index >= 0); }
 	uint8_t calibration_count() const { return _calibration_count; }
@@ -92,7 +91,8 @@ public:
 	// Compute sensor offset from bias (board frame)
 	matrix::Vector3f BiasCorrectedSensorOffset(const matrix::Vector3f &bias) const
 	{
-		return (_rotation.I() * bias) + _thermal_offset + _offset;
+		// updated calibration offset = existing offset + bias rotated to sensor frame
+		return _offset + (_rotation.I() * bias);
 	}
 
 	bool ParametersLoad();
@@ -104,8 +104,6 @@ public:
 	void SensorCorrectionsUpdate(bool force = false);
 
 private:
-	static constexpr float TEMPERATURE_INVALID = -1000.f;
-
 	uORB::Subscription _sensor_correction_sub{ORB_ID(sensor_correction)};
 
 	Rotation _rotation_enum{ROTATION_NONE};
@@ -113,7 +111,6 @@ private:
 	matrix::Dcmf _rotation;
 	matrix::Vector3f _offset;
 	matrix::Vector3f _thermal_offset;
-	float _temperature{NAN};
 
 	int8_t _calibration_index{-1};
 	uint32_t _device_id{0};

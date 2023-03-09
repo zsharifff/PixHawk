@@ -63,7 +63,7 @@
 #include <uORB/topics/sensor_mag.h>
 #include <uORB/topics/sensor_gyro.h>
 #include <uORB/topics/vehicle_attitude.h>
-#include <uORB/topics/vehicle_gps_position.h>
+#include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/mag_worker_data.h>
 
 using namespace matrix;
@@ -94,8 +94,6 @@ struct mag_worker_data_t {
 	float		*y[MAX_MAGS];
 	float		*z[MAX_MAGS];
 
-	float		temperature[MAX_MAGS] {NAN, NAN, NAN, NAN};
-
 	calibration::Magnetometer calibration[MAX_MAGS] {};
 };
 
@@ -108,7 +106,7 @@ int do_mag_calibration(orb_advert_t *mavlink_log_pub)
 	// Collect: As defined by configuration
 	// start with a full mask, all six bits set
 	int32_t cal_mask = (1 << 6) - 1;
-	param_get(param_find("CAL_MAG_SIDES"), &cal_mask);
+	param_get(param_find("SENS_MAG_SIDES"), &cal_mask);
 
 	// Calibrate all mags at the same time
 	if (result == PX4_OK) {
@@ -232,10 +230,10 @@ static calibrate_return check_calibration_result(float offset_x, float offset_y,
 static float get_sphere_radius()
 {
 	// if GPS is available use real field intensity from world magnetic model
-	uORB::SubscriptionMultiArray<vehicle_gps_position_s, 3> gps_subs{ORB_ID::vehicle_gps_position};
+	uORB::SubscriptionMultiArray<sensor_gps_s, 3> gps_subs{ORB_ID::vehicle_gps_position};
 
 	for (auto &gps_sub : gps_subs) {
-		vehicle_gps_position_s gps;
+		sensor_gps_s gps;
 
 		if (gps_sub.copy(&gps)) {
 			if (hrt_elapsed_time(&gps.timestamp) < 100_s && (gps.fix_type >= 2) && (gps.eph < 1000)) {
@@ -342,7 +340,6 @@ static calibrate_return mag_calibration_worker(detect_orientation_return orienta
 		if (mag_sub[0].updatedBlocking(1000_ms)) {
 			bool rejected = false;
 			Vector3f new_samples[MAX_MAGS] {};
-			float new_temperature[MAX_MAGS] {NAN, NAN, NAN, NAN};
 
 			for (uint8_t cur_mag = 0; cur_mag < MAX_MAGS; cur_mag++) {
 				if (worker_data->calibration[cur_mag].device_id() != 0) {
@@ -371,7 +368,6 @@ static calibrate_return mag_calibration_worker(detect_orientation_return orienta
 
 						if (!reject) {
 							new_samples[cur_mag] = Vector3f{mag.x, mag.y, mag.z};
-							new_temperature[cur_mag] = mag.temperature;
 							updated = true;
 							break;
 						}
@@ -391,14 +387,6 @@ static calibrate_return mag_calibration_worker(detect_orientation_return orienta
 						worker_data->x[cur_mag][worker_data->calibration_counter_total[cur_mag]] = new_samples[cur_mag](0);
 						worker_data->y[cur_mag][worker_data->calibration_counter_total[cur_mag]] = new_samples[cur_mag](1);
 						worker_data->z[cur_mag][worker_data->calibration_counter_total[cur_mag]] = new_samples[cur_mag](2);
-
-						if (!PX4_ISFINITE(worker_data->temperature[cur_mag])) {
-							// set first valid value
-							worker_data->temperature[cur_mag] = new_temperature[cur_mag];
-
-						} else {
-							worker_data->temperature[cur_mag] = 0.5f * (worker_data->temperature[cur_mag] + new_temperature[cur_mag]);
-						}
 
 						worker_data->calibration_counter_total[cur_mag]++;
 					}
@@ -616,8 +604,20 @@ calibrate_return mag_calibrate_all(orb_advert_t *mavlink_log_pub, int32_t cal_ma
 									       worker_data.calibration_counter_total[cur_mag], sphere_data, true);
 
 						if (ellipsoid_ret == PX4_OK) {
-							ellipsoid_fit_success  = true;
+							ellipsoid_fit_success = true;
 						}
+					}
+				}
+
+				if (!sphere_fit_success && !ellipsoid_fit_success) {
+					if (worker_data.calibration[cur_mag].enabled()) {
+						calibration_log_emergency(mavlink_log_pub, "Retry calibration (unable to fit mag %" PRIu8 ")", cur_mag);
+						result = calibrate_return_error;
+						break;
+
+					} else {
+						calibration_log_info(mavlink_log_pub, "Retry calibration (unable to fit mag %" PRIu8 ")", cur_mag);
+						continue;
 					}
 				}
 
@@ -629,12 +629,6 @@ calibrate_return mag_calibrate_all(orb_advert_t *mavlink_log_pub, int32_t cal_ma
 					offdiag[cur_mag](i) = sphere_data.offdiag(i);
 				}
 
-				if (!sphere_fit_success && !ellipsoid_fit_success) {
-					calibration_log_emergency(mavlink_log_pub, "Retry calibration (unable to fit mag %" PRIu8 ")", cur_mag);
-					result = calibrate_return_error;
-					break;
-				}
-
 				result = check_calibration_result(sphere[cur_mag](0), sphere[cur_mag](1), sphere[cur_mag](2),
 								  sphere_radius[cur_mag],
 								  diag[cur_mag](0), diag[cur_mag](1), diag[cur_mag](2),
@@ -642,7 +636,16 @@ calibrate_return mag_calibrate_all(orb_advert_t *mavlink_log_pub, int32_t cal_ma
 								  mavlink_log_pub, cur_mag);
 
 				if (result == calibrate_return_error) {
-					break;
+					// tolerate mag cal failures if this sensor is disabled
+					if (worker_data.calibration[cur_mag].enabled()) {
+						break;
+
+					} else {
+						// reset
+						sphere[cur_mag].zero();
+						diag[cur_mag] = Vector3f{1.f, 1.f, 1.f};
+						offdiag[cur_mag].zero();
+					}
 				}
 			}
 		}
@@ -693,10 +696,10 @@ calibrate_return mag_calibrate_all(orb_advert_t *mavlink_log_pub, int32_t cal_ma
 
 	// Attempt to automatically determine external mag rotations
 	if (result == calibrate_return_ok) {
-		int32_t param_cal_mag_rot_auto = 0;
-		param_get(param_find("CAL_MAG_ROT_AUTO"), &param_cal_mag_rot_auto);
+		int32_t param_sens_mag_autorot = 0;
+		param_get(param_find("SENS_MAG_AUTOROT"), &param_sens_mag_autorot);
 
-		if ((worker_data.calibration_sides >= 3) && (param_cal_mag_rot_auto == 1)) {
+		if ((worker_data.calibration_sides >= 3) && (param_sens_mag_autorot == 1)) {
 
 			// find first internal mag to use as reference
 			int internal_index = -1;
@@ -912,8 +915,6 @@ calibrate_return mag_calibrate_all(orb_advert_t *mavlink_log_pub, int32_t cal_ma
 					current_cal.set_offdiagonal(offdiag[cur_mag]);
 				}
 
-				current_cal.set_temperature(worker_data.temperature[cur_mag]);
-
 				current_cal.PrintStatus();
 
 				if (current_cal.ParametersSave(cur_mag, true)) {
@@ -955,7 +956,7 @@ int do_mag_calibration_quick(orb_advert_t *mavlink_log_pub, float heading_radian
 
 	} else {
 		uORB::Subscription vehicle_gps_position_sub{ORB_ID(vehicle_gps_position)};
-		vehicle_gps_position_s gps;
+		sensor_gps_s gps;
 
 		if (vehicle_gps_position_sub.copy(&gps)) {
 			if ((gps.timestamp != 0) && (gps.eph < 1000)) {
@@ -1019,7 +1020,6 @@ int do_mag_calibration_quick(orb_advert_t *mavlink_log_pub, float heading_radian
 				// use any existing scale and store the offset to the expected earth field
 				const Vector3f offset = Vector3f{mag.x, mag.y, mag.z} - (cal.scale().I() * cal.rotation().transpose() * expected_field);
 				cal.set_offset(offset);
-				cal.set_temperature(mag.temperature);
 
 				// save new calibration
 				if (cal.ParametersSave(cur_mag)) {

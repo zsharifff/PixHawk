@@ -36,6 +36,7 @@
 #include "log_writer.h"
 #include "logged_topics.h"
 #include "messages.h"
+#include "watchdog.h"
 #include <containers/Array.hpp>
 #include "util.h"
 #include <px4_platform_common/defines.h>
@@ -87,8 +88,23 @@ public:
 		while_armed = 0,
 		boot_until_disarm,
 		boot_until_shutdown,
-		rc_aux1
+		rc_aux1,
+		arm_until_shutdown,
 	};
+
+	enum class PrintLoadReason {
+		Preflight,
+		Postflight,
+		Watchdog
+	};
+
+	struct timer_callback_data_s {
+		px4_sem_t semaphore;
+
+		watchdog_data_t watchdog_data;
+		px4::atomic_bool watchdog_triggered{false};
+	};
+
 
 	Logger(LogWriter::Backend backend, size_t buffer_size, uint32_t log_interval, const char *poll_topic_name,
 	       LogMode log_mode, bool log_name_timestamp, float rate_factor);
@@ -130,13 +146,14 @@ public:
 
 	void set_arm_override(bool override) { _manually_logging_override = override; }
 
-private:
+	void trigger_watchdog_now()
+	{
+#ifdef __PX4_NUTTX
+		_timer_callback_data.watchdog_data.manual_watchdog_trigger = true;
+#endif
+	}
 
-	enum class PrintLoadReason {
-		Preflight,
-		Postflight,
-		Watchdog
-	};
+private:
 
 	static constexpr int		MAX_MISSION_TOPICS_NUM = 5; /**< Maximum number of mission topics */
 	static constexpr unsigned	MAX_NO_LOGFILE = 999;	/**< Maximum number of log files */
@@ -228,9 +245,8 @@ private:
 
 	/**
 	 * write performance counters
-	 * @param preflight preflight if true, postflight otherwise
 	 */
-	void write_perf_data(bool preflight);
+	void write_perf_data(PrintLoadReason reason);
 
 	/**
 	 * write bootup console output
@@ -253,6 +269,7 @@ private:
 
 	void write_info(LogType type, const char *name, const char *value);
 	void write_info_multiple(LogType type, const char *name, const char *value, bool is_continued);
+	void write_info_multiple(LogType type, const char *name, int fd);
 	void write_info(LogType type, const char *name, int32_t value);
 	void write_info(LogType type, const char *name, uint32_t value);
 
@@ -264,6 +281,7 @@ private:
 	void write_parameter_defaults(LogType type);
 
 	void write_changed_parameters(LogType type);
+	void write_events_file(LogType type);
 
 	inline bool copy_if_updated(int sub_idx, void *buffer, bool try_to_subscribe);
 
@@ -353,7 +371,7 @@ private:
 	float						_rate_factor{1.0f};
 	const orb_metadata				*_polling_topic_meta{nullptr}; ///< if non-null, poll on this topic instead of sleeping
 	orb_advert_t					_mavlink_log_pub{nullptr};
-	uint8_t						_next_topic_id{0}; ///< id of next subscribed ulog topic
+	uint8_t						_next_topic_id{0}; ///< Logger's internal id (first topic is 0, then 1, and so on) it will assign to the next subscribed ulog topic, used for ulog_message_add_logged_s
 	char						*_replay_file_name{nullptr};
 	bool						_should_stop_file_log{false}; /**< if true _next_load_print is set and file logging
 											will be stopped after load printing (for the full log) */
@@ -367,6 +385,8 @@ private:
 	int						_lockstep_component{-1};
 
 	uint32_t					_message_gaps{0};
+
+	timer_callback_data_s				_timer_callback_data{};
 
 	uORB::Subscription				_manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription				_vehicle_command_sub{ORB_ID(vehicle_command)};

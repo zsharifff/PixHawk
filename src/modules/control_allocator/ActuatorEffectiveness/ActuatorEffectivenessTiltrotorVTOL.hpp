@@ -46,7 +46,9 @@
 #include "ActuatorEffectivenessControlSurfaces.hpp"
 #include "ActuatorEffectivenessTilts.hpp"
 
-#include <uORB/topics/actuator_controls.h>
+#include <uORB/topics/normalized_unsigned_setpoint.h>
+#include <uORB/topics/tiltrotor_extra_controls.h>
+
 #include <uORB/Subscription.hpp>
 
 class ActuatorEffectivenessTiltrotorVTOL : public ModuleParams, public ActuatorEffectiveness
@@ -55,7 +57,7 @@ public:
 	ActuatorEffectivenessTiltrotorVTOL(ModuleParams *parent);
 	virtual ~ActuatorEffectivenessTiltrotorVTOL() = default;
 
-	bool getEffectivenessMatrix(Configuration &configuration, bool force) override;
+	bool getEffectivenessMatrix(Configuration &configuration, EffectivenessUpdateReason external_update) override;
 
 	int numMatrices() const override { return 2; }
 
@@ -74,14 +76,20 @@ public:
 
 	void setFlightPhase(const FlightPhase &flight_phase) override;
 
+	void allocateAuxilaryControls(const float dt, int matrix_index, ActuatorVector &actuator_sp) override;
+
 	void updateSetpoint(const matrix::Vector<float, NUM_AXES> &control_sp, int matrix_index,
-			    ActuatorVector &actuator_sp) override;
+			    ActuatorVector &actuator_sp, const matrix::Vector<float, NUM_ACTUATORS> &actuator_min,
+			    const matrix::Vector<float, NUM_ACTUATORS> &actuator_max) override;
 
 	const char *name() const override { return "VTOL Tiltrotor"; }
 
 	uint32_t getStoppedMotors() const override { return _stopped_motors; }
+
+	void getUnallocatedControl(int matrix_index, control_allocator_status_s &status) override;
+
 protected:
-	bool _updated{true};
+	bool _collective_tilt_updated{true};
 	ActuatorEffectivenessRotors _mc_rotors;
 	ActuatorEffectivenessControlSurfaces _control_surfaces;
 	ActuatorEffectivenessTilts _tilts;
@@ -92,7 +100,17 @@ protected:
 	int _first_control_surface_idx{0}; ///< applies to matrix 1
 	int _first_tilt_idx{0}; ///< applies to matrix 0
 
-	float _last_tilt_control{NAN};
+	float _last_collective_tilt_control{NAN};
 
-	uORB::Subscription _actuator_controls_1_sub{ORB_ID(actuator_controls_1)};
+	uORB::Subscription _flaps_setpoint_sub{ORB_ID(flaps_setpoint)};
+	uORB::Subscription _spoilers_setpoint_sub{ORB_ID(spoilers_setpoint)};
+
+	struct YawTiltSaturationFlags {
+		bool tilt_yaw_pos;
+		bool tilt_yaw_neg;
+	};
+
+	YawTiltSaturationFlags _yaw_tilt_saturation_flags{};
+
+	uORB::Subscription _tiltrotor_extra_controls_sub{ORB_ID(tiltrotor_extra_controls)};
 };

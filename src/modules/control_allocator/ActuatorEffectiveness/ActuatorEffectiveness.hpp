@@ -41,7 +41,10 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <matrix/matrix/math.hpp>
+#include <uORB/topics/control_allocator_status.h>
 
 enum class AllocationMethod {
 	NONE = -1,
@@ -57,6 +60,12 @@ enum class ActuatorType {
 	COUNT
 };
 
+enum class EffectivenessUpdateReason {
+	NO_EXTERNAL_UPDATE = 0,
+	CONFIGURATION_UPDATE = 1,
+	MOTOR_ACTIVATION_UPDATE = 2,
+};
+
 
 class ActuatorEffectiveness
 {
@@ -66,6 +75,15 @@ public:
 
 	static constexpr int NUM_ACTUATORS = 16;
 	static constexpr int NUM_AXES = 6;
+
+	enum ControlAxis {
+		ROLL = 0,
+		PITCH,
+		YAW,
+		THRUST_X,
+		THRUST_Y,
+		THRUST_Z
+	};
 
 	static constexpr int MAX_NUM_MATRICES = 2;
 
@@ -147,7 +165,7 @@ public:
 	 *
 	 * @return true if updated and matrix is set
 	 */
-	virtual bool getEffectivenessMatrix(Configuration &configuration, bool force) = 0;
+	virtual bool getEffectivenessMatrix(Configuration &configuration, EffectivenessUpdateReason external_update) { return false;}
 
 	/**
 	 * Get the current flight phase
@@ -164,6 +182,13 @@ public:
 	 */
 	virtual const char *name() const = 0;
 
+	/**
+	 * Callback from the control allocation, allowing to manipulate the setpoint.
+	 * Used to allocate auxiliary controls to actuators (e.g. flaps and spoilers).
+	 *
+	 * @param actuator_sp input & output setpoint
+	 */
+	virtual void allocateAuxilaryControls(const float dt, int matrix_index, ActuatorVector &actuator_sp) {}
 
 	/**
 	 * Callback from the control allocation, allowing to manipulate the setpoint.
@@ -172,12 +197,19 @@ public:
 	 * @param actuator_sp input & output setpoint
 	 */
 	virtual void updateSetpoint(const matrix::Vector<float, NUM_AXES> &control_sp,
-				    int matrix_index, ActuatorVector &actuator_sp) {}
+				    int matrix_index, ActuatorVector &actuator_sp, const matrix::Vector<float, NUM_ACTUATORS> &actuator_min,
+				    const matrix::Vector<float, NUM_ACTUATORS> &actuator_max) {}
 
 	/**
 	 * Get a bitmask of motors to be stopped
 	 */
 	virtual uint32_t getStoppedMotors() const { return 0; }
+
+	/**
+	 * Fill in the unallocated torque and thrust, customized by effectiveness type.
+	 * Can be implemented for every type separately. If not implemented then the effectivenes matrix is used instead.
+	 */
+	virtual void getUnallocatedControl(int matrix_index, control_allocator_status_s &status) {}
 
 protected:
 	FlightPhase _flight_phase{FlightPhase::HOVER_FLIGHT};		///< Current flight phase

@@ -5,10 +5,10 @@
 # @type Simulation
 # @class VTOL
 #
-# @output MAIN1 motor right
-# @output MAIN2 motor left
-# @output MAIN5 elevon right
-# @output MAIN6 elevon left
+# @output Motor1 motor right
+# @output Motor2 motor left
+# @output Servo1 elevon right
+# @output Servo2 elevon left
 #
 # @maintainer Romain Chiappinelli <romain.chiap@gmail.com>
 #
@@ -22,15 +22,33 @@ param set-default VT_ELEV_MC_LOCK 0
 param set-default VT_MOT_COUNT 2
 param set-default VT_TYPE 0
 param set-default VT_FW_DIFTHR_EN 1
-param set-default VT_FW_DIFTHR_SC 0.3
+param set-default VT_FW_DIFTHR_S_Y 0.3
 param set-default MPC_MAN_Y_MAX 60
 param set-default MC_PITCH_P 5
 
-param set-default MAV_TYPE 19
-set MAV_TYPE 19
-set MIXER vtol_tailsitter_duo_sat
+param set-default CA_AIRFRAME 4
+param set-default CA_ROTOR_COUNT 2
+param set-default CA_ROTOR0_KM -0.05
+param set-default CA_ROTOR0_PY 0.2
+param set-default CA_ROTOR1_KM -0.05
+param set-default CA_ROTOR1_PY -0.2
+param set-default CA_SV_CS_COUNT 2
+param set-default CA_SV_CS0_TRQ_P 0.3
+param set-default CA_SV_CS0_TRQ_Y 0.3
+param set-default CA_SV_CS0_TYPE 5
+param set-default CA_SV_CS1_TRQ_P 0.3
+param set-default CA_SV_CS1_TRQ_Y -0.3
+param set-default CA_SV_CS1_TYPE 6
 
-set PWM_OUT 1234
+param set-default HIL_ACT_FUNC1 101
+param set-default HIL_ACT_FUNC2 102
+param set-default HIL_ACT_FUNC5 202
+param set-default HIL_ACT_FUNC6 201
+param set-default HIL_ACT_REV 32
+
+param set-default MAV_TYPE 19
+
+
 
 # set SYS_HITL to 2 to start the SIH and avoid sensors startup
 param set-default SYS_HITL 2

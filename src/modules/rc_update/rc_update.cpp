@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2016-2021 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2016-2022 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,7 +56,8 @@ static bool operator ==(const manual_control_switches_s &a, const manual_control
 		a.transition_switch == b.transition_switch &&
 		a.gear_switch == b.gear_switch &&
 		a.photo_switch == b.photo_switch &&
-		a.video_switch == b.video_switch);
+		a.video_switch == b.video_switch &&
+		a.engage_main_motor_switch == b.engage_main_motor_switch);
 }
 
 static bool operator !=(const manual_control_switches_s &a, const manual_control_switches_s &b) { return !(a == b); }
@@ -115,7 +116,7 @@ RCUpdate::~RCUpdate()
 bool RCUpdate::init()
 {
 	if (!_input_rc_sub.registerCallback()) {
-		PX4_ERR("input_rc callback registration failed!");
+		PX4_ERR("callback registration failed");
 		return false;
 	}
 
@@ -200,6 +201,21 @@ void RCUpdate::parameters_updated()
 			}
 		}
 	}
+
+	// Center throttle trim when it's set to the minimum to correct for hardcoded QGC RC calibration
+	// See https://github.com/mavlink/qgroundcontrol/commit/0577af2e944a0f53919aeb1367d580f744004b2c
+	const int8_t throttle_channel = _rc.function[rc_channels_s::FUNCTION_THROTTLE];
+
+	if (throttle_channel >= 0 && throttle_channel < RC_MAX_CHAN_COUNT) {
+		const uint16_t throttle_min = _parameters.min[throttle_channel];
+		const uint16_t throttle_trim = _parameters.trim[throttle_channel];
+		const uint16_t throttle_max = _parameters.max[throttle_channel];
+
+		if (throttle_min == throttle_trim) {
+			const uint16_t new_throttle_trim = (throttle_min + throttle_max) / 2;
+			_parameters.trim[throttle_channel] = new_throttle_trim;
+		}
+	}
 }
 
 void RCUpdate::update_rc_functions()
@@ -230,6 +246,8 @@ void RCUpdate::update_rc_functions()
 	for (int i = 0; i < rc_parameter_map_s::RC_PARAM_MAP_NCHAN; i++) {
 		_rc.function[rc_channels_s::FUNCTION_PARAM_1 + i] = _parameters.rc_map_param[i] - 1;
 	}
+
+	_rc.function[rc_channels_s::FUNCTION_ENGAGE_MAIN_MOTOR] = _param_rc_map_eng_mot.get() - 1;
 
 	map_flight_modes_buttons();
 }
@@ -320,7 +338,7 @@ RCUpdate::map_flight_modes_buttons()
 	}
 
 	// If the functionality is disabled we don't need to map channels
-	const int flightmode_buttons = _param_rc_map_flightmode_buttons.get();
+	const int flightmode_buttons = _param_rc_map_fltm_btn.get();
 
 	if (flightmode_buttons == 0) {
 		return;
@@ -447,45 +465,21 @@ void RCUpdate::Run()
 
 		/* read out and scale values from raw message even if signal is invalid */
 		for (unsigned int i = 0; i < channel_count_limited; i++) {
+			// float conversions of uint16_t values
+			const float value = input_rc.values[i];
+			const float min = _parameters.min[i];
+			const float trim = _parameters.trim[i];
+			const float max = _parameters.max[i];
+			const float dz = _parameters.dz[i];
 
-			/*
-			 * 1) Constrain to min/max values, as later processing depends on bounds.
-			 */
-			input_rc.values[i] = math::constrain(input_rc.values[i], _parameters.min[i], _parameters.max[i]);
-
-			/*
-			 * 2) Scale around the mid point differently for lower and upper range.
-			 *
-			 * This is necessary as they don't share the same endpoints and slope.
-			 *
-			 * First normalize to 0..1 range with correct sign (below or above center),
-			 * the total range is 2 (-1..1).
-			 * If center (trim) == min, scale to 0..1, if center (trim) == max,
-			 * scale to -1..0.
-			 *
-			 * As the min and max bounds were enforced in step 1), division by zero
-			 * cannot occur, as for the case of center == min or center == max the if
-			 * statement is mutually exclusive with the arithmetic NaN case.
-			 *
-			 * DO NOT REMOVE OR ALTER STEP 1!
-			 */
-			if (input_rc.values[i] > (_parameters.trim[i] + _parameters.dz[i])) {
-				_rc.channels[i] = (input_rc.values[i] - _parameters.trim[i] - _parameters.dz[i]) / (float)(
-							  _parameters.max[i] - _parameters.trim[i] - _parameters.dz[i]);
-
-			} else if (input_rc.values[i] < (_parameters.trim[i] - _parameters.dz[i])) {
-				_rc.channels[i] = (input_rc.values[i] - _parameters.trim[i] + _parameters.dz[i]) / (float)(
-							  _parameters.trim[i] - _parameters.min[i] - _parameters.dz[i]);
-
-			} else {
-				/* in the configured dead zone, output zero */
-				_rc.channels[i] = 0.f;
-			}
+			// piecewise linear function to apply RC calibration
+			_rc.channels[i] = math::interpolateNXY(value,
+			{min, trim - dz, trim + dz, max},
+			{-1.f, 0.f, 0.f, 1.f});
 
 			if (_parameters.rev[i]) {
 				_rc.channels[i] = -_rc.channels[i];
 			}
-
 
 			/* handle any parameter-induced blowups */
 			if (!PX4_ISFINITE(_rc.channels[i])) {
@@ -513,7 +507,7 @@ void RCUpdate::Run()
 		if (input_source_stable && channel_count_stable && !_rc_signal_lost_hysteresis.get_state()) {
 
 			if ((input_rc.timestamp_last_signal > _last_timestamp_signal)
-			    && (input_rc.timestamp_last_signal - _last_timestamp_signal < 1_s)) {
+			    && (input_rc.timestamp_last_signal < _last_timestamp_signal + VALID_DATA_MIN_INTERVAL_US)) {
 
 				perf_count(_valid_data_interval_perf);
 
@@ -542,6 +536,12 @@ void RCUpdate::Run()
 			}
 
 			_last_timestamp_signal = input_rc.timestamp_last_signal;
+
+		} else {
+			// RC input unstable or lost, clear any previous manual_switches
+			if (_manual_switches_last_publish.timestamp_sample != 0) {
+				_manual_switches_last_publish = {};
+			}
 		}
 
 		memcpy(_rc_values_previous, input_rc.values, sizeof(input_rc.values[0]) * channel_count_limited);
@@ -599,7 +599,7 @@ void RCUpdate::UpdateManualSwitches(const hrt_abstime &timestamp_sample)
 			switches.mode_slot = num_slots;
 		}
 
-	} else if (_param_rc_map_flightmode_buttons.get() > 0) {
+	} else if (_param_rc_map_fltm_btn.get() > 0) {
 		switches.mode_slot = manual_control_switches_s::MODE_SLOT_NONE;
 		bool is_consistent_button_press = false;
 
@@ -623,7 +623,7 @@ void RCUpdate::UpdateManualSwitches(const hrt_abstime &timestamp_sample)
 			}
 		}
 
-		_button_pressed_hysteresis.set_state_and_update(is_consistent_button_press, hrt_absolute_time());
+		_button_pressed_hysteresis.set_state_and_update(is_consistent_button_press, timestamp_sample);
 
 		if (_button_pressed_hysteresis.get_state()) {
 			switches.mode_slot = _potential_button_press_slot;
@@ -637,14 +637,17 @@ void RCUpdate::UpdateManualSwitches(const hrt_abstime &timestamp_sample)
 	switches.arm_switch        = get_rc_sw2pos_position(rc_channels_s::FUNCTION_ARMSWITCH,  _param_rc_armswitch_th.get());
 	switches.transition_switch = get_rc_sw2pos_position(rc_channels_s::FUNCTION_TRANSITION, _param_rc_trans_th.get());
 	switches.gear_switch       = get_rc_sw2pos_position(rc_channels_s::FUNCTION_GEAR,       _param_rc_gear_th.get());
-
+	switches.engage_main_motor_switch = get_rc_sw2pos_position(rc_channels_s::FUNCTION_ENGAGE_MAIN_MOTOR,
+					    _param_rc_eng_mot_th.get());
 #if defined(ATL_MANTIS_RC_INPUT_HACKS)
 	switches.photo_switch = get_rc_sw2pos_position(rc_channels_s::FUNCTION_AUX_3, 0.5f);
 	switches.video_switch = get_rc_sw2pos_position(rc_channels_s::FUNCTION_AUX_4, 0.5f);
 #endif
 
-	// last 2 switch updates identical (simple protection from bad RC data)
-	if (switches == _manual_switches_previous) {
+	// last 2 switch updates identical within 1 second (simple protection from bad RC data)
+	if ((switches == _manual_switches_previous)
+	    && (switches.timestamp_sample < _manual_switches_previous.timestamp_sample + VALID_DATA_MIN_INTERVAL_US)) {
+
 		const bool switches_changed = (switches != _manual_switches_last_publish);
 
 		// publish immediately on change or at ~1 Hz
@@ -673,10 +676,10 @@ void RCUpdate::UpdateManualControlInput(const hrt_abstime &timestamp_sample)
 	manual_control_input.data_source = manual_control_setpoint_s::SOURCE_RC;
 
 	// limit controls
-	manual_control_input.y     = get_rc_value(rc_channels_s::FUNCTION_ROLL,    -1.f, 1.f);
-	manual_control_input.x     = get_rc_value(rc_channels_s::FUNCTION_PITCH,   -1.f, 1.f);
-	manual_control_input.r     = get_rc_value(rc_channels_s::FUNCTION_YAW,     -1.f, 1.f);
-	manual_control_input.z     = get_rc_value(rc_channels_s::FUNCTION_THROTTLE, -1.f, 1.f);
+	manual_control_input.roll = get_rc_value(rc_channels_s::FUNCTION_ROLL,    -1.f, 1.f);
+	manual_control_input.pitch = get_rc_value(rc_channels_s::FUNCTION_PITCH,   -1.f, 1.f);
+	manual_control_input.yaw = get_rc_value(rc_channels_s::FUNCTION_YAW,     -1.f, 1.f);
+	manual_control_input.throttle = get_rc_value(rc_channels_s::FUNCTION_THROTTLE, -1.f, 1.f);
 	manual_control_input.flaps = get_rc_value(rc_channels_s::FUNCTION_FLAPS,   -1.f, 1.f);
 	manual_control_input.aux1  = get_rc_value(rc_channels_s::FUNCTION_AUX_1,   -1.f, 1.f);
 	manual_control_input.aux2  = get_rc_value(rc_channels_s::FUNCTION_AUX_2,   -1.f, 1.f);
@@ -689,52 +692,6 @@ void RCUpdate::UpdateManualControlInput(const hrt_abstime &timestamp_sample)
 	manual_control_input.timestamp = hrt_absolute_time();
 	_manual_control_input_pub.publish(manual_control_input);
 	_last_manual_control_input_publish = manual_control_input.timestamp;
-
-
-	actuator_controls_s actuator_group_3{};
-	// copy in previous actuator control setpoint in case aux{1, 2, 3} isn't changed
-	_actuator_controls_3_sub.update(&actuator_group_3);
-	// populate and publish actuator_controls_3 copied from mapped manual_control_input
-	actuator_group_3.control[0] = manual_control_input.y;
-	actuator_group_3.control[1] = manual_control_input.x;
-	actuator_group_3.control[2] = manual_control_input.r;
-	actuator_group_3.control[3] = manual_control_input.z;
-	actuator_group_3.control[4] = manual_control_input.flaps;
-
-	float new_aux_values[3];
-	new_aux_values[0] = manual_control_input.aux1;
-	new_aux_values[1] = manual_control_input.aux2;
-	new_aux_values[2] = manual_control_input.aux3;
-
-	// if AUX RC was already active, we update. otherwise, we check
-	// if there is a major stick movement to re-activate RC mode
-	bool major_movement[3] = {false, false, false};
-
-	// detect a big stick movement
-	for (int i = 0; i < 3; i++) {
-		if (fabsf(_last_manual_control_input[i] - new_aux_values[i]) > 0.1f) {
-			major_movement[i] = true;
-		}
-	}
-
-	for (int i = 0; i < 3; i++) {
-		// if someone else (DO_SET_ACTUATOR) updated the actuator control
-		// and we haven't had a major movement, switch back to automatic control
-		if ((fabsf(_last_manual_control_input[i] - actuator_group_3.control[5 + i])
-		     > 0.0001f) && (!major_movement[i])) {
-			_aux_already_active[i] = false;
-		}
-
-		if (_aux_already_active[i] || major_movement[i]) {
-			_aux_already_active[i] = true;
-			_last_manual_control_input[i] = new_aux_values[i];
-
-			actuator_group_3.control[5 + i] = new_aux_values[i];
-		}
-	}
-
-	actuator_group_3.timestamp = hrt_absolute_time();
-	_actuator_group_3_pub.publish(actuator_group_3);
 }
 
 int RCUpdate::task_spawn(int argc, char *argv[])

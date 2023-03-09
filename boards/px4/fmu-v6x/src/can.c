@@ -37,7 +37,26 @@
  * Board-specific CAN functions.
  */
 
-#ifdef CONFIG_CAN
+#if !defined(CONFIG_CAN)
+
+#include <stdint.h>
+
+#include "board_config.h"
+
+
+__EXPORT
+uint16_t board_get_can_interfaces(void)
+{
+	uint16_t enabled_interfaces = 0x3;
+
+	if (!PX4_MFT_HW_SUPPORTED(PX4_MFT_CAN2)) {
+		enabled_interfaces &= ~(1 << 1);
+	}
+
+	return enabled_interfaces;
+}
+
+#else
 
 #include <errno.h>
 #include <debug.h>
@@ -46,13 +65,11 @@
 #include <arch/board/board.h>
 
 #include "chip.h"
-#include "arm_arch.h"
+#include "arm_internal.h"
 
 #include "chip.h"
 #include "stm32_can.h"
 #include "board_config.h"
-
-#ifdef CONFIG_CAN
 
 /************************************************************************************
  * Pre-processor Definitions
@@ -122,7 +139,4 @@ int can_devinit(void)
 
 	return OK;
 }
-
-#endif
-
 #endif /* CONFIG_CAN */

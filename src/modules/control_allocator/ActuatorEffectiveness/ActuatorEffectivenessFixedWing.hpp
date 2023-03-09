@@ -37,7 +37,7 @@
 #include "ActuatorEffectivenessRotors.hpp"
 #include "ActuatorEffectivenessControlSurfaces.hpp"
 
-#include <uORB/topics/actuator_controls.h>
+#include <uORB/topics/normalized_unsigned_setpoint.h>
 
 class ActuatorEffectivenessFixedWing : public ModuleParams, public ActuatorEffectiveness
 {
@@ -45,18 +45,18 @@ public:
 	ActuatorEffectivenessFixedWing(ModuleParams *parent);
 	virtual ~ActuatorEffectivenessFixedWing() = default;
 
-	bool getEffectivenessMatrix(Configuration &configuration, bool force) override;
+	bool getEffectivenessMatrix(Configuration &configuration, EffectivenessUpdateReason external_update) override;
 
 	const char *name() const override { return "Fixed Wing"; }
 
-	void updateSetpoint(const matrix::Vector<float, NUM_AXES> &control_sp, int matrix_index,
-			    ActuatorVector &actuator_sp) override;
+	void allocateAuxilaryControls(const float dt, int matrix_index, ActuatorVector &actuator_sp) override;
 
 private:
 	ActuatorEffectivenessRotors _rotors;
 	ActuatorEffectivenessControlSurfaces _control_surfaces;
 
-	uORB::Subscription _actuator_controls_0_sub{ORB_ID(actuator_controls_0)};
+	uORB::Subscription _flaps_setpoint_sub{ORB_ID(flaps_setpoint)};
+	uORB::Subscription _spoilers_setpoint_sub{ORB_ID(spoilers_setpoint)};
 
 	int _first_control_surface_idx{0}; ///< applies to matrix 1
 };

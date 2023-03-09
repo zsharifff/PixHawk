@@ -79,6 +79,11 @@ public:
 	void setUsingEvPosAiding(bool val) { _is_using_ev_pos_aiding = val; }
 	void setUsingEvVelAiding(bool val) { _is_using_ev_vel_aiding = val; }
 
+	void setUsingBaroHgtAiding(bool val) { _is_using_baro_hgt_aiding = val; }
+	void setUsingGpsHgtAiding(bool val) { _is_using_gps_hgt_aiding = val; }
+	void setUsingRngHgtAiding(bool val) { _is_using_rng_hgt_aiding = val; }
+	void setUsingEvHgtAiding(bool val) { _is_using_ev_hgt_aiding = val; }
+
 	bool hasHeadingFailed() const { return _has_heading_failed; }
 	bool hasHorizVelFailed() const { return _has_horiz_vel_failed; }
 	bool hasVertVelFailed() const { return _has_vert_vel_failed; }
@@ -149,14 +154,24 @@ private:
 	bool _is_using_ev_pos_aiding{};
 	bool _is_using_ev_vel_aiding{};
 
+	bool _is_using_baro_hgt_aiding{};
+	bool _is_using_gps_hgt_aiding{};
+	bool _is_using_rng_hgt_aiding{};
+	bool _is_using_ev_hgt_aiding{};
+
 	// Low-pass filters for innovation pre-flight checks
 	InnovationLpf _filter_vel_n_innov;	///< Preflight low pass filter N axis velocity innovations (m/sec)
 	InnovationLpf _filter_vel_e_innov;	///< Preflight low pass filter E axis velocity innovations (m/sec)
 	InnovationLpf _filter_vel_d_innov;	///< Preflight low pass filter D axis velocity innovations (m/sec)
-	InnovationLpf _filter_hgt_innov;	///< Preflight low pass filter height innovation (m)
 	InnovationLpf _filter_heading_innov;	///< Preflight low pass filter heading innovation magntitude (rad)
 	InnovationLpf _filter_flow_x_innov;	///< Preflight low pass filter optical flow innovation (rad)
 	InnovationLpf _filter_flow_y_innov;	///< Preflight low pass filter optical flow innovation (rad)
+
+	// Preflight low pass filter height innovation (m)
+	InnovationLpf _filter_baro_hgt_innov;
+	InnovationLpf _filter_gps_hgt_innov;
+	InnovationLpf _filter_rng_hgt_innov;
+	InnovationLpf _filter_ev_hgt_innov;
 
 	// Preflight low pass filter time constant inverse (1/sec)
 	static constexpr float _innov_lpf_tau_inv = 0.2f;
@@ -169,7 +184,7 @@ private:
 	// Maximum permissible yaw innovation to pass pre-flight checks when not aiding inertial nav using NE frame observations (rad)
 	static constexpr float _heading_innov_test_lim = 0.52f;
 	// Maximum permissible flow innovation to pass pre-flight checks
-	static constexpr float _flow_innov_test_lim = 0.25f;
+	static constexpr float _flow_innov_test_lim = 0.5f;
 	// Preflight velocity innovation spike limit (m/sec)
 	static constexpr float _vel_innov_spike_lim = 2.0f * _vel_innov_test_lim;
 	// Preflight position innovation spike limit (m)

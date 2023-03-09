@@ -40,9 +40,17 @@
 #include <px4_platform_common/posix.h>
 #include <px4_platform_common/tasks.h>
 
+#if defined(__PX4_NUTTX) && !defined(CONFIG_BUILD_FLAT) && defined(__KERNEL__)
+#include <px4_platform/board_ctrl.h>
+#endif
+
 #include "uORBDeviceNode.hpp"
 #include "uORBUtils.hpp"
 #include "uORBManager.hpp"
+
+#ifdef CONFIG_ORB_COMMUNICATOR
+pthread_mutex_t uORB::Manager::_communicator_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 uORB::Manager *uORB::Manager::_Instance = nullptr;
 
@@ -52,6 +60,9 @@ bool uORB::Manager::initialize()
 		_Instance = new uORB::Manager();
 	}
 
+#if defined(__PX4_NUTTX) && !defined(CONFIG_BUILD_FLAT) && defined(__KERNEL__)
+	px4_register_boardct_ioctl(_ORBIOCDEVBASE, orb_ioctl);
+#endif
 	return _Instance != nullptr;
 }
 
@@ -103,8 +114,135 @@ uORB::DeviceMaster *uORB::Manager::get_device_master()
 	return _device_master;
 }
 
+#if defined(__PX4_NUTTX) && !defined(CONFIG_BUILD_FLAT) && defined(__KERNEL__)
+int	uORB::Manager::orb_ioctl(unsigned int cmd, unsigned long arg)
+{
+	int ret = PX4_OK;
+
+	switch (cmd) {
+	case ORBIOCDEVEXISTS: {
+			orbiocdevexists_t *data = (orbiocdevexists_t *)arg;
+
+			if (data->check_advertised) {
+				if (uORB::Manager::get_instance()) {
+					data->ret = uORB::Manager::get_instance()->orb_exists(get_orb_meta(data->orb_id), data->instance);
+
+				} else {
+					data->ret = PX4_ERROR;
+				}
+
+			} else {
+				data->ret = uORB::Manager::orb_device_node_exists(data->orb_id, data->instance) ? PX4_OK : PX4_ERROR;
+			}
+		}
+		break;
+
+	case ORBIOCDEVADVERTISE: {
+			orbiocdevadvertise_t *data = (orbiocdevadvertise_t *)arg;
+			uORB::DeviceMaster *dev = uORB::Manager::get_instance()->get_device_master();
+
+			if (dev) {
+				data->ret = dev->advertise(data->meta, data->is_advertiser, data->instance);
+
+			} else {
+				data->ret = PX4_ERROR;
+			}
+		}
+		break;
+
+	case ORBIOCDEVUNADVERTISE: {
+			orbiocdevunadvertise_t *data = (orbiocdevunadvertise_t *)arg;
+			data->ret = uORB::Manager::orb_unadvertise(data->handle);
+		}
+		break;
+
+	case ORBIOCDEVPUBLISH: {
+			orbiocdevpublish_t *data = (orbiocdevpublish_t *)arg;
+			data->ret = uORB::Manager::orb_publish(data->meta, data->handle, data->data);
+		}
+		break;
+
+	case ORBIOCDEVADDSUBSCRIBER: {
+			orbiocdevaddsubscriber_t *data = (orbiocdevaddsubscriber_t *)arg;
+			data->handle = uORB::Manager::orb_add_internal_subscriber(data->orb_id, data->instance, data->initial_generation);
+		}
+		break;
+
+	case ORBIOCDEVREMSUBSCRIBER: {
+			uORB::Manager::orb_remove_internal_subscriber(reinterpret_cast<void *>(arg));
+		}
+		break;
+
+	case ORBIOCDEVQUEUESIZE: {
+			orbiocdevqueuesize_t *data = (orbiocdevqueuesize_t *)arg;
+			data->size = uORB::Manager::orb_get_queue_size(data->handle);
+		}
+		break;
+
+	case ORBIOCDEVDATACOPY: {
+			orbiocdevdatacopy_t *data = (orbiocdevdatacopy_t *)arg;
+			data->ret = uORB::Manager::orb_data_copy(data->handle, data->dst, data->generation, data->only_if_updated);
+		}
+		break;
+
+	case ORBIOCDEVREGCALLBACK: {
+			orbiocdevregcallback_t *data = (orbiocdevregcallback_t *)arg;
+			data->registered = uORB::Manager::register_callback(data->handle, data->callback_sub);
+		}
+		break;
+
+	case ORBIOCDEVUNREGCALLBACK: {
+			orbiocdevunregcallback_t *data = (orbiocdevunregcallback_t *)arg;
+			uORB::Manager::unregister_callback(data->handle, data->callback_sub);
+		}
+		break;
+
+	case ORBIOCDEVGETINSTANCE: {
+			orbiocdevgetinstance_t *data = (orbiocdevgetinstance_t *)arg;
+			data->instance = uORB::Manager::orb_get_instance(data->handle);
+		}
+		break;
+
+	case ORBIOCDEVMASTERCMD: {
+			uORB::DeviceMaster *dev = uORB::Manager::get_instance()->get_device_master();
+
+			if (dev) {
+				if (arg == ORB_DEVMASTER_TOP) {
+					dev->showTop(nullptr, 0);
+
+				} else {
+					dev->printStatistics();
+				}
+			}
+		}
+		break;
+
+	case ORBIOCDEVUPDATESAVAIL: {
+			orbiocdevupdatesavail_t *data = (orbiocdevupdatesavail_t *)arg;
+			data->ret = updates_available(data->handle, data->last_generation);
+		}
+		break;
+
+	case ORBIOCDEVISADVERTISED: {
+			orbiocdevisadvertised_t *data = (orbiocdevisadvertised_t *)arg;
+			data->ret = is_advertised(data->handle);
+		}
+		break;
+
+	default:
+		ret = -ENOTTY;
+	}
+
+	return ret;
+}
+#endif
+
 int uORB::Manager::orb_exists(const struct orb_metadata *meta, int instance)
 {
+	if (meta == nullptr) {
+		return PX4_ERROR;
+	}
+
 	int ret = PX4_ERROR;
 
 	// instance valid range: [0, ORB_MULTI_MAX_INSTANCES)
@@ -112,7 +250,7 @@ int uORB::Manager::orb_exists(const struct orb_metadata *meta, int instance)
 		return ret;
 	}
 
-	uORB::DeviceMaster *dev =  uORB::Manager::get_instance()->get_device_master();
+	uORB::DeviceMaster *dev = uORB::Manager::get_instance()->get_device_master();
 
 	if (dev) {
 		uORB::DeviceNode *node = dev->getDeviceNode(meta, instance);
@@ -123,48 +261,6 @@ int uORB::Manager::orb_exists(const struct orb_metadata *meta, int instance)
 			}
 		}
 	}
-
-#ifdef ORB_COMMUNICATOR
-
-	/*
-	 * Generate the path to the node and try to open it.
-	 */
-	char path[orb_maxpath];
-	int inst = instance;
-
-	ret = uORB::Utils::node_mkpath(path, meta, &inst);
-
-	if (ret != OK) {
-		errno = -ret;
-		return PX4_ERROR;
-	}
-
-	ret = px4_access(path, F_OK);
-
-	if (ret == -1 && meta != nullptr && !_remote_topics.empty()) {
-		ret = (_remote_topics.find(meta->o_name) != _remote_topics.end()) ? OK : PX4_ERROR;
-	}
-
-	if (ret == 0) {
-		// we know the topic exists, but it's not necessarily advertised/published yet (for example
-		// if there is only a subscriber)
-		// The open() will not lead to memory allocations.
-		int fd = px4_open(path, 0);
-
-		if (fd >= 0) {
-			unsigned long is_advertised;
-
-			if (px4_ioctl(fd, ORBIOCISADVERTISED, (unsigned long)&is_advertised) == 0) {
-				if (!is_advertised) {
-					ret = PX4_ERROR;
-				}
-			}
-
-			px4_close(fd);
-		}
-	}
-
-#endif /* ORB_COMMUNICATOR */
 
 	return ret;
 }
@@ -224,10 +320,15 @@ orb_advert_t uORB::Manager::orb_advertise_multi(const struct orb_metadata *meta,
 		return nullptr;
 	}
 
-#ifdef ORB_COMMUNICATOR
-	// For remote systems call over and inform them
-	uORB::DeviceNode::topic_advertised(meta);
-#endif /* ORB_COMMUNICATOR */
+#ifdef CONFIG_ORB_COMMUNICATOR
+
+	// Advertise to the remote side, but only if it is a local topic. Otherwise
+	// we will generate an advertisement loop.
+	if (_remote_topics.find(meta->o_name) == false) {
+		uORB::DeviceNode::topic_advertised(meta);
+	}
+
+#endif /* CONFIG_ORB_COMMUNICATOR */
 
 	/* the advertiser may perform an initial publish to initialise the object */
 	if (data != nullptr) {
@@ -354,8 +455,16 @@ void uORB::Manager::orb_remove_internal_subscriber(void *node_handle)
 
 uint8_t uORB::Manager::orb_get_queue_size(const void *node_handle) { return static_cast<const DeviceNode *>(node_handle)->get_queue_size(); }
 
-bool uORB::Manager::orb_data_copy(void *node_handle, void *dst, unsigned &generation)
+bool uORB::Manager::orb_data_copy(void *node_handle, void *dst, unsigned &generation, bool only_if_updated)
 {
+	if (!is_advertised(node_handle)) {
+		return false;
+	}
+
+	if (only_if_updated && !static_cast<const uORB::DeviceNode *>(node_handle)->updates_available(generation)) {
+		return false;
+	}
+
 	return static_cast<DeviceNode *>(node_handle)->copy(dst, generation);
 }
 
@@ -379,6 +488,20 @@ uint8_t uORB::Manager::orb_get_instance(const void *node_handle)
 
 	return -1;
 }
+
+/* These are optimized by inlining in NuttX Flat build */
+#if !defined(CONFIG_BUILD_FLAT)
+unsigned uORB::Manager::updates_available(const void *node_handle, unsigned last_generation)
+{
+	return is_advertised(node_handle) ? static_cast<const uORB::DeviceNode *>(node_handle)->updates_available(
+		       last_generation) : 0;
+}
+
+bool uORB::Manager::is_advertised(const void *node_handle)
+{
+	return static_cast<const uORB::DeviceNode *>(node_handle)->is_advertised();
+}
+#endif
 
 int uORB::Manager::node_open(const struct orb_metadata *meta, bool advertiser, int *instance)
 {
@@ -453,41 +576,82 @@ int uORB::Manager::node_open(const struct orb_metadata *meta, bool advertiser, i
 	return fd;
 }
 
-#ifdef ORB_COMMUNICATOR
+#ifdef CONFIG_ORB_COMMUNICATOR
 void uORB::Manager::set_uorb_communicator(uORBCommunicator::IChannel *channel)
 {
-	_comm_channel = channel;
+	pthread_mutex_lock(&_communicator_mutex);
 
-	if (_comm_channel != nullptr) {
-		_comm_channel->register_handler(this);
+	if (channel != nullptr) {
+		channel->register_handler(this);
+		_comm_channel = channel;
 	}
+
+	pthread_mutex_unlock(&_communicator_mutex);
 }
 
 uORBCommunicator::IChannel *uORB::Manager::get_uorb_communicator()
 {
-	return _comm_channel;
+	pthread_mutex_lock(&_communicator_mutex);
+	uORBCommunicator::IChannel *temp = _comm_channel;
+	pthread_mutex_unlock(&_communicator_mutex);
+
+	return temp;
 }
 
-int16_t uORB::Manager::process_remote_topic(const char *topic_name, bool isAdvertisement)
+int16_t uORB::Manager::process_remote_topic(const char *topic_name)
 {
-	int16_t rc = 0;
+	PX4_DEBUG("entering process_remote_topic: name: %s", topic_name);
 
-	if (isAdvertisement) {
-		_remote_topics.insert(topic_name);
+	// Look to see if we already have a node for this topic
+	char nodepath[orb_maxpath];
+	int ret = uORB::Utils::node_mkpath(nodepath, topic_name);
 
-	} else {
-		_remote_topics.erase(topic_name);
+	if (ret == OK) {
+		DeviceMaster *device_master = get_device_master();
+
+		if (device_master) {
+			uORB::DeviceNode *node = device_master->getDeviceNode(nodepath);
+
+			if (node) {
+				PX4_INFO("Marking DeviceNode(%s) as advertised in process_remote_topic", topic_name);
+				node->mark_as_advertised();
+				_remote_topics.insert(topic_name);
+				return 0;
+			}
+		}
 	}
 
-	return rc;
+	// We didn't find a node so we need to create it via an advertisement
+	const struct orb_metadata *const *topic_list = orb_get_topics();
+	orb_id_t topic_ptr = nullptr;
+
+	for (size_t i = 0; i < orb_topics_count(); i++) {
+		if (strcmp(topic_list[i]->o_name, topic_name) == 0) {
+			topic_ptr = topic_list[i];
+			break;
+		}
+	}
+
+	if (topic_ptr) {
+		PX4_INFO("Advertising remote topic %s", topic_name);
+		_remote_topics.insert(topic_name);
+		// Add some queue depth when advertising remote topics. These
+		// topics may get aggregated and thus delivered in a batch that
+		// requires some buffering in a queue.
+		orb_advertise(topic_ptr, nullptr, 5);
+
+	} else {
+		PX4_INFO("process_remote_topic meta not found for %s\n", topic_name);
+	}
+
+	return 0;
 }
 
-int16_t uORB::Manager::process_add_subscription(const char *messageName, int32_t msgRateInHz)
+int16_t uORB::Manager::process_add_subscription(const char *messageName)
 {
 	PX4_DEBUG("entering Manager_process_add_subscription: name: %s", messageName);
 
 	int16_t rc = 0;
-	_remote_subscriber_topics.insert(messageName);
 	char nodepath[orb_maxpath];
 	int ret = uORB::Utils::node_mkpath(nodepath, messageName);
 	DeviceMaster *device_master = get_device_master();
@@ -500,7 +664,7 @@ int16_t uORB::Manager::process_add_subscription(const char *messageName, int32_t
 
 		} else {
 			// node is present.
-			node->process_add_subscription(msgRateInHz);
+			node->process_add_subscription();
 		}
 
 	} else {
@@ -513,7 +677,6 @@ int16_t uORB::Manager::process_add_subscription(const char *messageName, int32_t
 int16_t uORB::Manager::process_remove_subscription(const char *messageName)
 {
 	int16_t rc = -1;
-	_remote_subscriber_topics.erase(messageName);
 	char nodepath[orb_maxpath];
 	int ret = uORB::Utils::node_mkpath(nodepath, messageName);
 	DeviceMaster *device_master = get_device_master();
@@ -560,15 +723,7 @@ int16_t uORB::Manager::process_received_message(const char *messageName, int32_t
 	return rc;
 }
 
-bool uORB::Manager::is_remote_subscriber_present(const char *messageName)
-{
-#ifdef __PX4_NUTTX
-	return _remote_subscriber_topics.find(messageName);
-#else
-	return (_remote_subscriber_topics.find(messageName) != _remote_subscriber_topics.end());
-#endif
-}
-#endif /* ORB_COMMUNICATOR */
+#endif /* CONFIG_ORB_COMMUNICATOR */
 
 #ifdef ORB_USE_PUBLISHER_RULES
 

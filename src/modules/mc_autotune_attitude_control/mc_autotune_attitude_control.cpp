@@ -57,7 +57,7 @@ McAutotuneAttitudeControl::~McAutotuneAttitudeControl()
 bool McAutotuneAttitudeControl::init()
 {
 	if (!_parameter_update_sub.registerCallback()) {
-		PX4_ERR("parameter_update callback registration failed!");
+		PX4_ERR("callback registration failed");
 		return false;
 	}
 
@@ -445,8 +445,8 @@ void McAutotuneAttitudeControl::updateStateMachine(hrt_abstime now)
 	if (_state != state::wait_for_disarm
 	    && _state != state::idle
 	    && (((now - _state_start_time) > 20_s)
-		|| (fabsf(manual_control_setpoint.x) > 0.05f)
-		|| (fabsf(manual_control_setpoint.y) > 0.05f))) {
+		|| (fabsf(manual_control_setpoint.roll) > 0.05f)
+		|| (fabsf(manual_control_setpoint.pitch) > 0.05f))) {
 		_state = state::fail;
 		_state_start_time = now;
 	}
@@ -499,7 +499,7 @@ void McAutotuneAttitudeControl::revertParamGains()
 bool McAutotuneAttitudeControl::registerActuatorControlsCallback()
 {
 	if (!_actuator_controls_sub.registerCallback()) {
-		PX4_ERR("actuator_controls callback registration failed!");
+		PX4_ERR("callback registration failed");
 		return false;
 	}
 

@@ -33,8 +33,6 @@
 
 add_compile_options(${MAX_CUSTOM_OPT_LEVEL})
 
-add_subdirectory(tinybson)
-
 if (NOT PARAM_DEFAULT_OVERRIDES)
 	set(PARAM_DEFAULT_OVERRIDES "{}")
 endif()
@@ -59,7 +57,14 @@ if(DISABLE_PARAMS_MODULE_SCOPING)
 		${PX4_SOURCE_DIR}/src/*.yaml
 		)
 	foreach(file_path ${yaml_files})
-		list(APPEND module_config_files "${file_path}")
+		# VOXL2 doesn't support PWM and so it has no timer configurations
+		# that are expected when dealing with certain pwm modules. This will
+		# allow those timer configurations to be skipped.
+		if ((${PX4_BOARD_NAME} MATCHES "MODALAI_VOXL2") AND (file_path MATCHES pwm_out))
+			message(STATUS "Skipping pwm file path ${file_path} for VOXL2")
+		else()
+			list(APPEND module_config_files "${file_path}")
+		endif()
 	endforeach()
 
 	list(REMOVE_DUPLICATES module_config_files)
@@ -82,6 +87,7 @@ endif()
 if(CONFIG_BOARD_IO)
 	set(board_with_io_arg --board-with-io)
 endif()
+
 add_custom_command(OUTPUT ${generated_serial_params_file} ${generated_module_params_file}
 	COMMAND ${CMAKE_COMMAND} -E make_directory ${generated_params_dir}
 	COMMAND ${PYTHON_EXECUTABLE} ${PX4_SOURCE_DIR}/Tools/serial/generate_config.py
@@ -146,10 +152,12 @@ add_custom_command(OUTPUT px4_parameters.hpp
 		px_generate_params.py
 		templates/px4_parameters.hpp.jinja
 	)
+add_custom_target(parameters_header DEPENDS px4_parameters.hpp)
 
 set(SRCS)
 
 list(APPEND SRCS parameters.cpp)
+
 if(BUILD_TESTING)
 	list(APPEND SRCS param_translation_unit_tests.cpp)
 else()
@@ -158,18 +166,26 @@ endif()
 
 if(${PX4_PLATFORM} STREQUAL "nuttx")
 	add_subdirectory(flashparams)
+
+	# build user-side interface for protected build
+	if(NOT CONFIG_BUILD_FLAT)
+		list(APPEND SRCS parameters_ioctl.cpp)
+		add_library(usr_parameters usr_parameters_if.cpp px4_parameters.hpp)
+		add_dependencies(usr_parameters prebuild_targets)
+		target_compile_definitions(usr_parameters PRIVATE -DMODULE_NAME="usr_parameters")
+	endif()
 endif()
 
 # TODO: find a better way to do this
-if (NOT "${PX4_BOARD}" MATCHES "px4_io")
-	add_library(parameters
+if(NOT "${PX4_BOARD}" MATCHES "px4_io")
+	add_library(parameters STATIC EXCLUDE_FROM_ALL
 		${SRCS}
 		px4_parameters.hpp
 	)
 
 	target_link_libraries(parameters PRIVATE perf tinybson px4_platform)
 
-	target_compile_definitions(parameters PRIVATE -DMODULE_NAME="parameters")
+	target_compile_definitions(parameters PRIVATE -DMODULE_NAME="parameters" -D__KERNEL__)
 	target_compile_options(parameters
 		PRIVATE
 			#-DDEBUG_BUILD
@@ -177,12 +193,12 @@ if (NOT "${PX4_BOARD}" MATCHES "px4_io")
 			-Wno-sign-compare	# TODO: fix and enable
 	)
 else()
-	add_library(parameters ${PX4_SOURCE_DIR}/platforms/common/empty.c)
+	add_library(parameters STATIC EXCLUDE_FROM_ALL ${PX4_SOURCE_DIR}/platforms/common/empty.c)
 endif()
 add_dependencies(parameters prebuild_targets)
 
-if(${PX4_PLATFORM} STREQUAL "nuttx" AND CONFIG_BUILD_FLAT)
-	target_link_libraries(parameters PRIVATE flashparams tinybson)
+if(${PX4_PLATFORM} STREQUAL "nuttx")
+	target_link_libraries(parameters PRIVATE flashparams)
 endif()
 
 px4_add_functional_gtest(SRC ParameterTest.cpp LINKLIBS parameters)

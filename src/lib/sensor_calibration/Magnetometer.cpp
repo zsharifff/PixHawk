@@ -71,7 +71,7 @@ void Magnetometer::set_device_id(uint32_t device_id)
 bool Magnetometer::set_offset(const Vector3f &offset)
 {
 	if (Vector3f(_offset - offset).longerThan(0.01f)) {
-		if (PX4_ISFINITE(offset(0)) && PX4_ISFINITE(offset(1)) && PX4_ISFINITE(offset(2))) {
+		if (offset.isAllFinite()) {
 			_offset = offset;
 			_calibration_count++;
 			return true;
@@ -84,9 +84,7 @@ bool Magnetometer::set_offset(const Vector3f &offset)
 bool Magnetometer::set_scale(const Vector3f &scale)
 {
 	if (Vector3f(_scale.diag() - scale).longerThan(0.01f)) {
-		if ((scale(0) > 0.f) && (scale(1) > 0.f) && (scale(2) > 0.f) &&
-		    PX4_ISFINITE(scale(0)) && PX4_ISFINITE(scale(1)) && PX4_ISFINITE(scale(2))) {
-
+		if (scale.isAllFinite() && (scale(0) > 0.f) && (scale(1) > 0.f) && (scale(2) > 0.f)) {
 			_scale(0, 0) = scale(0);
 			_scale(1, 1) = scale(1);
 			_scale(2, 2) = scale(2);
@@ -102,7 +100,7 @@ bool Magnetometer::set_scale(const Vector3f &scale)
 bool Magnetometer::set_offdiagonal(const Vector3f &offdiagonal)
 {
 	if (Vector3f(Vector3f{_scale(0, 1), _scale(0, 2), _scale(1, 2)} - offdiagonal).longerThan(0.01f)) {
-		if (PX4_ISFINITE(offdiagonal(0)) && PX4_ISFINITE(offdiagonal(1)) && PX4_ISFINITE(offdiagonal(2))) {
+		if (offdiagonal.isAllFinite()) {
 
 			_scale(0, 1) = offdiagonal(0);
 			_scale(1, 0) = offdiagonal(0);
@@ -192,16 +190,6 @@ bool Magnetometer::ParametersLoad()
 			_priority = _external ? DEFAULT_EXTERNAL_PRIORITY : DEFAULT_PRIORITY;
 		}
 
-		// CAL_MAGx_TEMP
-		float cal_temp = GetCalibrationParamFloat(SensorString(), "TEMP", _calibration_index);
-
-		if (cal_temp > TEMPERATURE_INVALID) {
-			set_temperature(cal_temp);
-
-		} else {
-			set_temperature(NAN);
-		}
-
 		// CAL_MAGx_OFF{X,Y,Z}
 		set_offset(GetCalibrationParamsVector3f(SensorString(), "OFF", _calibration_index));
 
@@ -235,8 +223,6 @@ void Magnetometer::Reset()
 
 	_power_compensation.zero();
 	_power = 0.f;
-
-	_temperature = NAN;
 
 	_priority = _external ? DEFAULT_EXTERNAL_PRIORITY : DEFAULT_PRIORITY;
 
@@ -285,13 +271,6 @@ bool Magnetometer::ParametersSave(int desired_calibration_index, bool force)
 			success &= SetCalibrationParam(SensorString(), "ROT", _calibration_index, -1); // internal
 		}
 
-		if (PX4_ISFINITE(_temperature)) {
-			success &= SetCalibrationParam(SensorString(), "TEMP", _calibration_index, _temperature);
-
-		} else {
-			success &= SetCalibrationParam(SensorString(), "TEMP", _calibration_index, TEMPERATURE_INVALID);
-		}
-
 		return success;
 	}
 
@@ -302,20 +281,18 @@ void Magnetometer::PrintStatus()
 {
 	if (external()) {
 		PX4_INFO_RAW("%s %" PRIu32
-			     " EN: %d, offset: [%05.3f %05.3f %05.3f], scale: [%05.3f %05.3f %05.3f], %.1f degC, Ext ROT: %d\n",
+			     " EN: %d, offset: [%05.3f %05.3f %05.3f], scale: [%05.3f %05.3f %05.3f], Ext ROT: %d\n",
 			     SensorString(), device_id(), enabled(),
 			     (double)_offset(0), (double)_offset(1), (double)_offset(2),
 			     (double)_scale(0, 0), (double)_scale(1, 1), (double)_scale(2, 2),
-			     (double)_temperature,
 			     rotation_enum());
 
 	} else {
 		PX4_INFO_RAW("%s %" PRIu32
-			     " EN: %d, offset: [%05.3f %05.3f %05.3f], scale: [%05.3f %05.3f %05.3f], %.1f degC, Internal\n",
+			     " EN: %d, offset: [%05.3f %05.3f %05.3f], scale: [%05.3f %05.3f %05.3f], Internal\n",
 			     SensorString(), device_id(), enabled(),
 			     (double)_offset(0), (double)_offset(1), (double)_offset(2),
-			     (double)_scale(0, 0), (double)_scale(1, 1), (double)_scale(2, 2),
-			     (double)_temperature);
+			     (double)_scale(0, 0), (double)_scale(1, 1), (double)_scale(2, 2));
 	}
 
 #if defined(DEBUG_BUILD)

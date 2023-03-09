@@ -210,6 +210,7 @@ public:
 		MAVLINK_MODE_EXTVISIONMIN,
 		MAVLINK_MODE_GIMBAL,
 		MAVLINK_MODE_ONBOARD_LOW_BANDWIDTH,
+		MAVLINK_MODE_UAVIONIX,
 		MAVLINK_MODE_COUNT
 	};
 
@@ -264,6 +265,9 @@ public:
 		case MAVLINK_MODE_ONBOARD_LOW_BANDWIDTH:
 			return "OnboardLowBandwidth";
 
+		case MAVLINK_MODE_UAVIONIX:
+			return "uAvionix";
+
 		default:
 			return "Unknown";
 		}
@@ -281,7 +285,7 @@ public:
 
 	bool			get_forwarding_on() { return _forwarding_on; }
 
-	bool			is_connected() { return _tstatus.heartbeat_type_gcs; }
+	bool			is_gcs_connected() { return _tstatus.heartbeat_type_gcs; }
 
 #if defined(MAVLINK_UDP)
 	static Mavlink 		*get_instance_for_network_port(unsigned long port);
@@ -498,7 +502,6 @@ public:
 
 	bool hash_check_enabled() const { return _param_mav_hash_chk_en.get(); }
 	bool forward_heartbeats_enabled() const { return _param_mav_hb_forw_en.get(); }
-	bool odometry_loopback_enabled() const { return _param_mav_odom_lp.get(); }
 
 	bool failure_injection_enabled() const { return _param_sys_failure_injection_enabled.get(); }
 
@@ -544,6 +547,7 @@ private:
 	uORB::Subscription _vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Subscription _vehicle_command_ack_sub{ORB_ID(vehicle_command_ack)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _gimbal_v1_command_sub{ORB_ID(gimbal_v1_command)};
 
 	static bool		_boot_complete;
 
@@ -670,7 +674,6 @@ private:
 		(ParamBool<px4::params::MAV_FWDEXTSP>) _param_mav_fwdextsp,
 		(ParamBool<px4::params::MAV_HASH_CHK_EN>) _param_mav_hash_chk_en,
 		(ParamBool<px4::params::MAV_HB_FORW_EN>) _param_mav_hb_forw_en,
-		(ParamBool<px4::params::MAV_ODOM_LP>) _param_mav_odom_lp,
 		(ParamInt<px4::params::MAV_RADIO_TOUT>)      _param_mav_radio_timeout,
 		(ParamInt<px4::params::SYS_HITL>) _param_sys_hitl,
 		(ParamBool<px4::params::SYS_FAILURE_EN>) _param_sys_failure_injection_enabled
@@ -746,7 +749,7 @@ private:
 #endif // MAVLINK_UDP
 
 
-	void set_channel();
+	bool set_channel();
 
 	bool set_instance_id();
 

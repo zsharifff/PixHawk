@@ -46,9 +46,6 @@
 #include "uuv_att_control.hpp"
 
 
-#define ACTUATOR_PUBLISH_PERIOD_MS 4
-
-
 /**
  * UUV attitude control app start / stop handling function
  *
@@ -73,7 +70,7 @@ UUVAttitudeControl::~UUVAttitudeControl()
 bool UUVAttitudeControl::init()
 {
 	if (!_vehicle_attitude_sub.registerCallback()) {
-		PX4_ERR("vehicle_attitude callback registration failed!");
+		PX4_ERR("callback registration failed");
 		return false;
 	}
 
@@ -126,22 +123,6 @@ void UUVAttitudeControl::constrain_actuator_commands(float roll_u, float pitch_u
 
 	} else {
 		_actuators.control[actuator_controls_s::INDEX_THROTTLE] = 0.0f;
-	}
-
-	if (PX4_ISFINITE(thrust_y)) {
-		thrust_y = math::constrain(thrust_y, -1.0f, 1.0f);
-		_actuators.control[actuator_controls_s::INDEX_FLAPS] = thrust_y;
-
-	} else {
-		_actuators.control[actuator_controls_s::INDEX_FLAPS] = 0.0f;
-	}
-
-	if (PX4_ISFINITE(thrust_z)) {
-		thrust_z = math::constrain(thrust_z, -1.0f, 1.0f);
-		_actuators.control[actuator_controls_s::INDEX_SPOILERS] = thrust_z;
-
-	} else {
-		_actuators.control[actuator_controls_s::INDEX_SPOILERS] = 0.0f;
 	}
 }
 
@@ -280,9 +261,9 @@ void UUVAttitudeControl::Run()
 		// returning immediately and this loop will eat up resources.
 		if (_vcontrol_mode.flag_control_manual_enabled && !_vcontrol_mode.flag_control_rates_enabled) {
 			/* manual/direct control */
-			constrain_actuator_commands(_manual_control_setpoint.y, -_manual_control_setpoint.x,
-						    _manual_control_setpoint.r,
-						    _manual_control_setpoint.z, 0.f, 0.f);
+			constrain_actuator_commands(_manual_control_setpoint.roll, -_manual_control_setpoint.pitch,
+						    _manual_control_setpoint.yaw,
+						    _manual_control_setpoint.throttle, 0.f, 0.f);
 		}
 
 	}

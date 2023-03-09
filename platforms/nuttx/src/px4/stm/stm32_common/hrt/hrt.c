@@ -275,6 +275,8 @@ static void		hrt_call_enter(struct hrt_call *entry);
 static void		hrt_call_reschedule(void);
 static void		hrt_call_invoke(void);
 
+
+int hrt_ioctl(unsigned int cmd, unsigned long arg);
 /*
  * Specific registers and bits used by PPM sub-functions
  */
@@ -695,31 +697,6 @@ hrt_absolute_time(void)
 }
 
 /**
- * Convert a timespec to absolute time
- */
-hrt_abstime
-ts_to_abstime(const struct timespec *ts)
-{
-	hrt_abstime	result;
-
-	result = (hrt_abstime)(ts->tv_sec) * 1000000;
-	result += ts->tv_nsec / 1000;
-
-	return result;
-}
-
-/**
- * Convert absolute time to a timespec.
- */
-void
-abstime_to_ts(struct timespec *ts, hrt_abstime abstime)
-{
-	ts->tv_sec = abstime / 1000000;
-	abstime -= ts->tv_sec * 1000000;
-	ts->tv_nsec = abstime * 1000;
-}
-
-/**
  * Store the absolute time in an interrupt-safe fashion
  */
 void
@@ -987,22 +964,5 @@ hrt_call_delay(struct hrt_call *entry, hrt_abstime delay)
 {
 	entry->deadline = hrt_absolute_time() + delay;
 }
-
-#if !defined(CONFIG_BUILD_FLAT)
-/* These functions are inlined in all but NuttX protected/kernel builds */
-
-latency_info_t get_latency(uint16_t bucket_idx, uint16_t counter_idx)
-{
-	latency_info_t ret = {latency_buckets[bucket_idx], latency_counters[counter_idx]};
-	return ret;
-}
-
-void reset_latency_counters(void)
-{
-	for (int i = 0; i <= get_latency_bucket_count(); i++) {
-		latency_counters[i] = 0;
-	}
-}
-#endif
 
 #endif /* HRT_TIMER */

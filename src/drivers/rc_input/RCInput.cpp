@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2021 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2022 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -48,12 +48,6 @@ RCInput::RCInput(const char *device) :
 	_cycle_perf(perf_alloc(PC_ELAPSED, MODULE_NAME": cycle time")),
 	_publish_interval_perf(perf_alloc(PC_INTERVAL, MODULE_NAME": publish interval"))
 {
-	// rc input, published to ORB
-	_rc_in.input_source = input_rc_s::RC_INPUT_SOURCE_PX4FMU_PPM;
-
-	// initialize it as RC lost
-	_rc_in.rc_lost = true;
-
 	// initialize raw_rc values and count
 	for (unsigned i = 0; i < input_rc_s::RC_INPUT_MAX_CHANNELS; i++) {
 		_raw_rc_values[i] = UINT16_MAX;
@@ -62,6 +56,10 @@ RCInput::RCInput(const char *device) :
 	if (device) {
 		strncpy(_device, device, sizeof(_device) - 1);
 		_device[sizeof(_device) - 1] = '\0';
+	}
+
+	if ((_param_rc_input_proto.get() >= 0) && (_param_rc_input_proto.get() <= RC_SCAN::RC_SCAN_GHST)) {
+		_rc_scan_state = static_cast<RC_SCAN>(_param_rc_input_proto.get());
 	}
 }
 
@@ -112,6 +110,8 @@ RCInput::init()
 	px4_arch_unconfiggpio(GPIO_PPM_IN);
 #endif // GPIO_PPM_IN
 
+	rc_io_invert(false);
+
 	return 0;
 }
 
@@ -123,15 +123,24 @@ RCInput::task_spawn(int argc, char *argv[])
 	int myoptind = 1;
 	int ch;
 	const char *myoptarg = nullptr;
-	const char *device = nullptr;
+	const char *device_name = nullptr;
 #if defined(RC_SERIAL_PORT)
-	device = RC_SERIAL_PORT;
+	device_name = RC_SERIAL_PORT;
 #endif // RC_SERIAL_PORT
+
+#if defined(RC_SERIAL_PORT) && defined(PX4IO_SERIAL_DEVICE)
+
+	// if RC_SERIAL_PORT == PX4IO_SERIAL_DEVICE then don't use it by default if the px4io is running
+	if ((strcmp(RC_SERIAL_PORT, PX4IO_SERIAL_DEVICE) == 0) && (access("/dev/px4io", R_OK) == 0)) {
+		device_name = nullptr;
+	}
+
+#endif // RC_SERIAL_PORT && PX4IO_SERIAL_DEVICE
 
 	while ((ch = px4_getopt(argc, argv, "d:", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'd':
-			device = myoptarg;
+			device_name = myoptarg;
 			break;
 
 		case '?':
@@ -149,24 +158,31 @@ RCInput::task_spawn(int argc, char *argv[])
 		return -1;
 	}
 
-	if (device == nullptr) {
-		PX4_ERR("valid device required");
-		return PX4_ERROR;
+	if (device_name && (access(device_name, R_OK | W_OK) == 0)) {
+		RCInput *instance = new RCInput(device_name);
+
+		if (instance == nullptr) {
+			PX4_ERR("alloc failed");
+			return PX4_ERROR;
+		}
+
+		_object.store(instance);
+		_task_id = task_id_is_work_queue;
+
+		instance->ScheduleOnInterval(_current_update_interval);
+
+		return PX4_OK;
+
+	} else {
+		if (device_name) {
+			PX4_ERR("invalid device (-d) %s", device_name);
+
+		} else {
+			PX4_INFO("valid device required");
+		}
 	}
 
-	RCInput *instance = new RCInput(device);
-
-	if (instance == nullptr) {
-		PX4_ERR("alloc failed");
-		return PX4_ERROR;
-	}
-
-	_object.store(instance);
-	_task_id = task_id_is_work_queue;
-
-	instance->ScheduleOnInterval(_current_update_interval);
-
-	return PX4_OK;
+	return PX4_ERROR;
 }
 
 void
@@ -244,12 +260,22 @@ RCInput::fill_rc_in(uint16_t raw_rc_count_local,
 
 void RCInput::set_rc_scan_state(RC_SCAN newState)
 {
-	PX4_DEBUG("RCscan: %s failed, trying %s", RCInput::RC_SCAN_STRING[_rc_scan_state], RCInput::RC_SCAN_STRING[newState]);
-	_rc_scan_begin = 0;
-	_rc_scan_state = newState;
-	_rc_scan_locked = false;
+	if ((_param_rc_input_proto.get() > RC_SCAN::RC_SCAN_NONE)
+	    && (_param_rc_input_proto.get() <= RC_SCAN::RC_SCAN_GHST)) {
 
-	_report_lock = true;
+		_rc_scan_state = static_cast<RC_SCAN>(_param_rc_input_proto.get());
+
+	} else if (_param_rc_input_proto.get() < 0) {
+		// only auto change if RC_INPUT_PROTO set to auto (-1)
+		PX4_DEBUG("RCscan: %s failed, trying %s", RCInput::RC_SCAN_STRING[_rc_scan_state], RCInput::RC_SCAN_STRING[newState]);
+		_rc_scan_state = newState;
+
+	} else {
+		_rc_scan_state = RC_SCAN::RC_SCAN_NONE;
+	}
+
+	_rc_scan_begin = 0;
+	_rc_scan_locked = false;
 }
 
 void RCInput::rc_io_invert(bool invert)
@@ -317,7 +343,7 @@ void RCInput::Run()
 			// Check for a pairing command
 			if (vcmd.command == vehicle_command_s::VEHICLE_CMD_START_RX_PAIR) {
 
-				uint8_t cmd_ret = vehicle_command_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
+				uint8_t cmd_ret = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
 #if defined(SPEKTRUM_POWER)
 
 				if (!_rc_scan_locked && !_armed) {
@@ -339,11 +365,11 @@ void RCInput::Run()
 
 						bind_spektrum(dsm_bind_pulses);
 
-						cmd_ret = vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED;
+						cmd_ret = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
 					}
 
 				} else {
-					cmd_ret = vehicle_command_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
+					cmd_ret = vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
 				}
 
 #endif // SPEKTRUM_POWER
@@ -394,8 +420,8 @@ void RCInput::Run()
 		bool rc_updated = false;
 
 		// This block scans for a supported serial RC input and locks onto the first one found
-		// Scan for 300 msec, then switch protocol
-		constexpr hrt_abstime rc_scan_max = 300_ms;
+		// Scan for 500 msec, then switch protocol
+		constexpr hrt_abstime rc_scan_max = 500_ms;
 
 		unsigned frame_drops = 0;
 
@@ -411,7 +437,13 @@ void RCInput::Run()
 			_bytes_rx += newBytes;
 		}
 
+		const bool rc_scan_locked = _rc_scan_locked;
+
 		switch (_rc_scan_state) {
+		case RC_SCAN_NONE:
+			// do nothing
+			break;
+
 		case RC_SCAN_SBUS:
 			if (_rc_scan_begin == 0) {
 				_rc_scan_begin = cycle_timestamp;
@@ -721,15 +753,27 @@ void RCInput::Run()
 		if (rc_updated) {
 			perf_count(_publish_interval_perf);
 
+			_rc_in.link_quality = -1;
+			_rc_in.rssi_dbm = NAN;
+
 			_to_input_rc.publish(_rc_in);
 
 		} else if (!rc_updated && !_armed && (hrt_elapsed_time(&_rc_in.timestamp_last_signal) > 1_s)) {
 			_rc_scan_locked = false;
 		}
 
-		if (_report_lock && _rc_scan_locked) {
-			_report_lock = false;
+		if (!rc_scan_locked && _rc_scan_locked) {
 			PX4_INFO("RC scan: %s RC input locked", RC_SCAN_STRING[_rc_scan_state]);
+		}
+
+		// set RC_INPUT_PROTO if RC successfully locked for > 3 seconds
+		if (!_armed && rc_updated && _rc_scan_locked
+		    && ((_rc_scan_begin != 0) && hrt_elapsed_time(&_rc_scan_begin) > 3_s)
+		    && (_param_rc_input_proto.get() < 0)
+		   ) {
+			// RC_INPUT_PROTO auto => locked selection
+			_param_rc_input_proto.set(_rc_scan_state);
+			_param_rc_input_proto.commit();
 		}
 	}
 }
@@ -816,6 +860,9 @@ int RCInput::print_status()
 
 	if (_rc_scan_locked) {
 		switch (_rc_scan_state) {
+		case RC_SCAN_NONE:
+			break;
+
 		case RC_SCAN_CRSF:
 			PX4_INFO("CRSF Telemetry: %s", _crsf_telemetry ? "yes" : "no");
 			break;

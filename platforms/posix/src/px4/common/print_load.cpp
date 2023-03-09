@@ -46,6 +46,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#include <px4_platform_common/log.h>
 #include <px4_platform_common/printload.h>
 #include <drivers/drv_hrt.h>
 
@@ -116,7 +117,6 @@ void print_load(int fd, struct print_load_s *print_state)
 	mach_msg_type_number_t thread_info_count;
 
 	thread_basic_info_t basic_info_th;
-	uint32_t stat_thread = 0;
 
 	// get all threads of the PX4 main task
 	kr = task_threads(task_handle, &thread_list, &th_cnt);
@@ -124,10 +124,6 @@ void print_load(int fd, struct print_load_s *print_state)
 	if (kr != KERN_SUCCESS) {
 		PX4_WARN("ERROR getting thread list");
 		return;
-	}
-
-	if (th_cnt > 0) {
-		stat_thread += th_cnt;
 	}
 
 	long tot_sec = 0;

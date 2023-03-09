@@ -79,6 +79,14 @@
 
 const struct peripheral_clock_config_s g_peripheral_clockconfig0[] = {
 	{
+		.clkname = DMAMUX0_CLK,
+#ifdef CONFIG_S32K1XX_EDMA
+		.clkgate = true,
+#else
+		.clkgate = false,
+#endif
+	},
+	{
 		.clkname = FLEXCAN0_CLK,
 #ifdef CONFIG_S32K1XX_FLEXCAN0
 		.clkgate = true,
@@ -101,7 +109,7 @@ const struct peripheral_clock_config_s g_peripheral_clockconfig0[] = {
 #else
 		.clkgate = false,
 #endif
-		.clksrc  = CLK_SRC_SIRC_DIV2,
+		.clksrc  = CLK_SRC_SPLL_DIV2,
 	},
 	{
 		.clkname = LPSPI0_CLK,
@@ -110,7 +118,7 @@ const struct peripheral_clock_config_s g_peripheral_clockconfig0[] = {
 #else
 		.clkgate = false,
 #endif
-		.clksrc  = CLK_SRC_SIRC_DIV2,
+		.clksrc  = CLK_SRC_SPLL_DIV2,
 	},
 	{
 		.clkname = LPUART0_CLK,
@@ -119,7 +127,7 @@ const struct peripheral_clock_config_s g_peripheral_clockconfig0[] = {
 #else
 		.clkgate = false,
 #endif
-		.clksrc  = CLK_SRC_SIRC_DIV2,
+		.clksrc  = CLK_SRC_SPLL_DIV2,
 	},
 	{
 		.clkname = LPUART1_CLK,
@@ -128,7 +136,7 @@ const struct peripheral_clock_config_s g_peripheral_clockconfig0[] = {
 #else
 		.clkgate = false,
 #endif
-		.clksrc  = CLK_SRC_SIRC_DIV2,
+		.clksrc  = CLK_SRC_SPLL_DIV2,
 	},
 	{
 		.clkname    = RTC0_CLK,
@@ -192,3 +200,7 @@ const struct peripheral_clock_config_s g_peripheral_clockconfig0[] = {
 		.clkgate = true,
 	},
 };
+
+unsigned int const num_of_peripheral_clocks_0 =
+	sizeof(g_peripheral_clockconfig0) /
+	sizeof(g_peripheral_clockconfig0[0]);

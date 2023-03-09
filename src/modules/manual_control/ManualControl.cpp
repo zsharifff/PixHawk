@@ -32,7 +32,9 @@
  ****************************************************************************/
 
 #include "ManualControl.hpp"
-#include <uORB/topics/commander_state.h>
+
+#include <px4_platform_common/events.h>
+#include <lib/systemlib/mavlink_log.h>
 #include <uORB/topics/vehicle_command.h>
 
 ManualControl::ManualControl() :
@@ -64,6 +66,16 @@ void ManualControl::Run()
 	perf_begin(_loop_perf);
 	perf_count(_loop_interval_perf);
 
+	if (_vehicle_status_sub.updated()) {
+		vehicle_status_s vehicle_status;
+
+		if (_vehicle_status_sub.copy(&vehicle_status)) {
+			_system_id = vehicle_status.system_id;
+			_rotary_wing = (vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROTARY_WING);
+			_vtol = vehicle_status.is_vtol;
+		}
+	}
+
 	// Check if parameters have changed
 	if (_parameter_update_sub.updated()) {
 		// clear update
@@ -78,6 +90,53 @@ void ManualControl::Run()
 
 		_selector.setRcInMode(_param_com_rc_in_mode.get());
 		_selector.setTimeout(_param_com_rc_loss_t.get() * 1_s);
+
+		// MAN_ARM_GESTURE
+		if (_param_man_arm_gesture.get() == 1) {
+			// RC_MAP_ARM_SW & MAN_ARM_GESTURE: disable arm gesture if an arm switch is configured
+			param_t param_rc_map_arm_sw = param_find("RC_MAP_ARM_SW");
+
+			if (param_rc_map_arm_sw != PARAM_INVALID) {
+				int32_t rc_map_arm_sw = 0;
+				param_get(param_rc_map_arm_sw, &rc_map_arm_sw);
+
+				if (rc_map_arm_sw > 0) {
+					_param_man_arm_gesture.set(0); // disable arm gesture
+					_param_man_arm_gesture.commit();
+
+					orb_advert_t mavlink_log_pub = nullptr;
+					mavlink_log_critical(&mavlink_log_pub, "Arm stick gesture disabled if arm switch in use\t")
+					/* EVENT
+					* @description <param>MAN_ARM_GESTURE</param> is now set to disable arm/disarm stick gesture.
+					*/
+					events::send(events::ID("rc_update_arm_stick_gesture_disabled_with_switch"), {events::Log::Info, events::LogInternal::Disabled},
+						     "Arm stick gesture disabled if arm switch in use");
+				}
+			}
+
+			// MC_AIRMODE & MAN_ARM_GESTURE: check for unsafe Airmode settings: yaw airmode requires disabling the stick arm gesture
+			if ((_param_man_arm_gesture.get() == 1) && (_rotary_wing || _vtol)) {
+				param_t param_mc_airmode = param_find("MC_AIRMODE");
+
+				if (param_mc_airmode != PARAM_INVALID) {
+					int32_t airmode = 0;
+					param_get(param_mc_airmode, &airmode);
+
+					if (airmode == 2) {
+						airmode = 1; // change to roll/pitch airmode
+						param_set(param_mc_airmode, &airmode);
+
+						orb_advert_t mavlink_log_pub = nullptr;
+						mavlink_log_critical(&mavlink_log_pub, "Yaw Airmode requires disabling the stick arm gesture\t")
+						/* EVENT
+						* @description <param>MC_AIRMODE</param> is now set to roll/pitch airmode.
+						*/
+						events::send(events::ID("commander_airmode_requires_no_arm_gesture"), {events::Log::Error, events::LogInternal::Disabled},
+							     "Yaw Airmode requires disabling the stick arm gesture");
+					}
+				}
+			}
+		}
 	}
 
 	const hrt_abstime now = hrt_absolute_time();
@@ -103,15 +162,10 @@ void ManualControl::Run()
 		const float dt_s = (now - _last_time) / 1e6f;
 		const float minimum_stick_change = 0.01f * _param_com_rc_stick_ov.get();
 
-		const bool rpy_moving = (fabsf(_x_diff.update(_selector.setpoint().x, dt_s)) > minimum_stick_change)
-					|| (fabsf(_y_diff.update(_selector.setpoint().y, dt_s)) > minimum_stick_change)
-					|| (fabsf(_r_diff.update(_selector.setpoint().r, dt_s)) > minimum_stick_change);
-
-		// Throttle change value doubled to achieve the same scaling even though the range is [0,1] instead of [-1,1]
-		const bool throttle_moving =
-			(fabsf(_z_diff.update(_selector.setpoint().z, dt_s)) * 2.f) > minimum_stick_change;
-
-		_selector.setpoint().sticks_moving = rpy_moving || throttle_moving;
+		_selector.setpoint().sticks_moving = (fabsf(_roll_diff.update(_selector.setpoint().roll, dt_s)) > minimum_stick_change)
+						     || (fabsf(_pitch_diff.update(_selector.setpoint().pitch, dt_s)) > minimum_stick_change)
+						     || (fabsf(_yaw_diff.update(_selector.setpoint().yaw, dt_s)) > minimum_stick_change)
+						     || (fabsf(_throttle_diff.update(_selector.setpoint().throttle, dt_s)) > minimum_stick_change);
 
 		if (switches_updated) {
 			// Only use switches if current source is RC as well.
@@ -145,7 +199,7 @@ void ManualControl::Run()
 					if (switches.return_switch != _previous_switches.return_switch) {
 						if (switches.return_switch == manual_control_switches_s::SWITCH_POS_ON) {
 							sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_SWITCH,
-									  commander_state_s::MAIN_STATE_AUTO_RTL);
+									  vehicle_status_s::NAVIGATION_STATE_AUTO_RTL);
 
 						} else if (switches.return_switch == manual_control_switches_s::SWITCH_POS_OFF) {
 							evaluateModeSlot(switches.mode_slot);
@@ -155,7 +209,7 @@ void ManualControl::Run()
 					if (switches.loiter_switch != _previous_switches.loiter_switch) {
 						if (switches.loiter_switch == manual_control_switches_s::SWITCH_POS_ON) {
 							sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_SWITCH,
-									  commander_state_s::MAIN_STATE_AUTO_LOITER);
+									  vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER);
 
 						} else if (switches.loiter_switch == manual_control_switches_s::SWITCH_POS_OFF) {
 							evaluateModeSlot(switches.mode_slot);
@@ -165,7 +219,7 @@ void ManualControl::Run()
 					if (switches.offboard_switch != _previous_switches.offboard_switch) {
 						if (switches.offboard_switch == manual_control_switches_s::SWITCH_POS_ON) {
 							sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_SWITCH,
-									  commander_state_s::MAIN_STATE_OFFBOARD);
+									  vehicle_status_s::NAVIGATION_STATE_OFFBOARD);
 
 						} else if (switches.offboard_switch == manual_control_switches_s::SWITCH_POS_OFF) {
 							evaluateModeSlot(switches.mode_slot);
@@ -256,10 +310,10 @@ void ManualControl::Run()
 			_manual_control_setpoint_pub.publish(_selector.setpoint());
 		}
 
-		_x_diff.reset();
-		_y_diff.reset();
-		_z_diff.reset();
-		_r_diff.reset();
+		_roll_diff.reset();
+		_pitch_diff.reset();
+		_yaw_diff.reset();
+		_throttle_diff.reset();
 		_stick_arm_hysteresis.set_state_and_update(false, now);
 		_stick_disarm_hysteresis.set_state_and_update(false, now);
 		_button_hysteresis.set_state_and_update(false, now);
@@ -276,8 +330,8 @@ void ManualControl::Run()
 void ManualControl::processStickArming(const manual_control_setpoint_s &input)
 {
 	// Arm gesture
-	const bool right_stick_centered = (fabsf(input.x) < 0.1f) && (fabsf(input.y) < 0.1f);
-	const bool left_stick_lower_right = (input.z < 0.1f) && (input.r > 0.9f);
+	const bool right_stick_centered = (fabsf(input.pitch) < 0.1f) && (fabsf(input.roll) < 0.1f);
+	const bool left_stick_lower_right = (input.throttle < -0.8f) && (input.yaw > 0.9f);
 
 	const bool previous_stick_arm_hysteresis = _stick_arm_hysteresis.get_state();
 	_stick_arm_hysteresis.set_state_and_update(left_stick_lower_right && right_stick_centered, input.timestamp);
@@ -287,7 +341,7 @@ void ManualControl::processStickArming(const manual_control_setpoint_s &input)
 	}
 
 	// Disarm gesture
-	const bool left_stick_lower_left = (input.z < 0.1f) && (input.r < -0.9f);
+	const bool left_stick_lower_left = (input.throttle < -0.8f) && (input.yaw < -0.9f);
 
 	const bool previous_stick_disarm_hysteresis = _stick_disarm_hysteresis.get_state();
 	_stick_disarm_hysteresis.set_state_and_update(left_stick_lower_left && right_stick_centered, input.timestamp);
@@ -304,27 +358,33 @@ void ManualControl::evaluateModeSlot(uint8_t mode_slot)
 		break;
 
 	case manual_control_switches_s::MODE_SLOT_1:
-		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT, _param_fltmode_1.get());
+		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT,
+				  navStateFromParam(_param_fltmode_1.get()));
 		break;
 
 	case manual_control_switches_s::MODE_SLOT_2:
-		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT, _param_fltmode_2.get());
+		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT,
+				  navStateFromParam(_param_fltmode_2.get()));
 		break;
 
 	case manual_control_switches_s::MODE_SLOT_3:
-		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT, _param_fltmode_3.get());
+		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT,
+				  navStateFromParam(_param_fltmode_3.get()));
 		break;
 
 	case manual_control_switches_s::MODE_SLOT_4:
-		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT, _param_fltmode_4.get());
+		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT,
+				  navStateFromParam(_param_fltmode_4.get()));
 		break;
 
 	case manual_control_switches_s::MODE_SLOT_5:
-		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT, _param_fltmode_5.get());
+		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT,
+				  navStateFromParam(_param_fltmode_5.get()));
 		break;
 
 	case manual_control_switches_s::MODE_SLOT_6:
-		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT, _param_fltmode_6.get());
+		sendActionRequest(action_request_s::ACTION_SWITCH_MODE, action_request_s::SOURCE_RC_MODE_SLOT,
+				  navStateFromParam(_param_fltmode_6.get()));
 		break;
 
 	default:
@@ -361,7 +421,7 @@ void ManualControl::send_camera_mode_command(CameraMode camera_mode)
 	vehicle_command_s command{};
 	command.command = vehicle_command_s::VEHICLE_CMD_SET_CAMERA_MODE;
 	command.param2 = static_cast<float>(camera_mode);
-	command.target_system = _param_mav_sys_id.get();
+	command.target_system = _system_id;
 	command.target_component = 100; // any camera
 
 	uORB::Publication<vehicle_command_s> command_pub{ORB_ID(vehicle_command)};
@@ -375,7 +435,7 @@ void ManualControl::send_photo_command()
 	command.command = vehicle_command_s::VEHICLE_CMD_IMAGE_START_CAPTURE;
 	command.param3 = 1; // one picture
 	command.param4 = _image_sequence++;
-	command.target_system = _param_mav_sys_id.get();
+	command.target_system = _system_id;
 	command.target_component = 100; // any camera
 
 	uORB::Publication<vehicle_command_s> command_pub{ORB_ID(vehicle_command)};
@@ -395,7 +455,7 @@ void ManualControl::send_video_command()
 		command.command = vehicle_command_s::VEHICLE_CMD_VIDEO_START_CAPTURE;
 	}
 
-	command.target_system = _param_mav_sys_id.get();
+	command.target_system = _system_id;
 	command.target_component = 100; // any camera
 
 	uORB::Publication<vehicle_command_s> command_pub{ORB_ID(vehicle_command)};
@@ -458,6 +518,28 @@ Module consuming manual_control_inputs publishing one manual_control_setpoint.
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;
+}
+
+int8_t ManualControl::navStateFromParam(int32_t param_value)
+{
+	switch(param_value) {
+		case 0: return vehicle_status_s::NAVIGATION_STATE_MANUAL;
+		case 1: return vehicle_status_s::NAVIGATION_STATE_ALTCTL;
+		case 2: return vehicle_status_s::NAVIGATION_STATE_POSCTL;
+		case 3: return vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
+		case 4: return vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+		case 5: return vehicle_status_s::NAVIGATION_STATE_AUTO_RTL;
+		case 6: return vehicle_status_s::NAVIGATION_STATE_ACRO;
+		case 7: return vehicle_status_s::NAVIGATION_STATE_OFFBOARD;
+		case 8: return vehicle_status_s::NAVIGATION_STATE_STAB;
+		case 10: return vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF;
+		case 11: return vehicle_status_s::NAVIGATION_STATE_AUTO_LAND;
+		case 12: return vehicle_status_s::NAVIGATION_STATE_AUTO_FOLLOW_TARGET;
+		case 13: return vehicle_status_s::NAVIGATION_STATE_AUTO_PRECLAND;
+		case 14: return vehicle_status_s::NAVIGATION_STATE_ORBIT;
+		case 15: return vehicle_status_s::NAVIGATION_STATE_AUTO_VTOL_TAKEOFF;
+	}
+	return -1;
 }
 
 extern "C" __EXPORT int manual_control_main(int argc, char *argv[])

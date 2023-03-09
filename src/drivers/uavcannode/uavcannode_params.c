@@ -61,31 +61,29 @@ PARAM_DEFINE_INT32(CANNODE_BITRATE, 1000000);
 PARAM_DEFINE_INT32(CANNODE_TERM, 0);
 
 /**
- * Cannode flow board rotation
- *
- * This parameter defines the yaw rotation of the Cannode flow board relative to the vehicle body frame.
- * Zero rotation is defined as X on flow board pointing towards front of vehicle.
- *
- * @value 0 No rotation
- * @value 1 Yaw 45°
- * @value 2 Yaw 90°
- * @value 3 Yaw 135°
- * @value 4 Yaw 180°
- * @value 5 Yaw 225°
- * @value 6 Yaw 270°
- * @value 7 Yaw 315°
- *
- * @reboot_required true
- *
- * @group UAVCAN
- */
-PARAM_DEFINE_INT32(CANNODE_FLOW_ROT, 0);
-
-/**
- * Enable RTCM pub/sub
+ * Enable MovingBaselineData subscription
  *
  * @boolean
  * @max 1
+ * @reboot_required true
  * @group UAVCAN
  */
-PARAM_DEFINE_INT32(CANNODE_GPS_RTCM, 0);
+PARAM_DEFINE_INT32(CANNODE_SUB_MBD, 0);
+
+/**
+ * Enable RTCM subscription
+ *
+ * @boolean
+ * @reboot_required true
+ * @group UAVCAN
+ */
+PARAM_DEFINE_INT32(CANNODE_SUB_RTCM, 0);
+
+/**
+ * Enable MovingBaselineData publication
+ *
+ * @boolean
+ * @reboot_required true
+ * @group UAVCAN
+ */
+PARAM_DEFINE_INT32(CANNODE_PUB_MBD, 0);

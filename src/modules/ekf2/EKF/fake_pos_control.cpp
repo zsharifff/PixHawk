@@ -40,19 +40,48 @@
 
 void Ekf::controlFakePosFusion()
 {
+	auto &aid_src = _aid_src_fake_pos;
+
 	// If we aren't doing any aiding, fake position measurements at the last known position to constrain drift
 	// During intial tilt aligment, fake position is used to perform a "quasi-stationary" leveling of the EKF
-	const bool fake_pos_data_ready = isTimedOut(_time_last_fake_pos_fuse, (uint64_t)2e5); // Fuse fake position at a limited rate
+	const bool fake_pos_data_ready = !isHorizontalAidingActive()
+					 && isTimedOut(aid_src.time_last_fuse, (uint64_t)2e5); // Fuse fake position at a limited rate
 
 	if (fake_pos_data_ready) {
+
+		Vector2f obs_var;
+
+		if (_control_status.flags.in_air && _control_status.flags.tilt_align) {
+			obs_var(0) = obs_var(1) = sq(fmaxf(_params.pos_noaid_noise, _params.gps_pos_noise));
+
+		} else if (!_control_status.flags.in_air && _control_status.flags.vehicle_at_rest) {
+			// Accelerate tilt fine alignment by fusing more
+			// aggressively when the vehicle is at rest
+			obs_var(0) = obs_var(1) = sq(0.01f);
+
+		} else {
+			obs_var(0) = obs_var(1) = sq(0.5f);
+		}
+
+		const float innov_gate = 3.f;
+
+		updateHorizontalPositionAidSrcStatus(_time_delayed_us, Vector2f(_last_known_pos), obs_var, innov_gate, aid_src);
+
+
 		const bool continuing_conditions_passing = !isHorizontalAidingActive();
-		const bool starting_conditions_passing = continuing_conditions_passing;
+		const bool starting_conditions_passing = continuing_conditions_passing
+				&& _horizontal_deadreckon_time_exceeded;
 
-		if (_using_synthetic_position) {
+		if (_control_status.flags.fake_pos) {
 			if (continuing_conditions_passing) {
-				fuseFakePosition();
 
-				const bool is_fusion_failing = isTimedOut(_time_last_fake_pos_fuse, (uint64_t)4e5);
+				// always protect against extreme values that could result in a NaN
+				aid_src.fusion_enabled = (aid_src.test_ratio[0] < sq(100.0f / innov_gate))
+							 && (aid_src.test_ratio[1] < sq(100.0f / innov_gate));
+
+				fuseHorizontalPosition(aid_src);
+
+				const bool is_fusion_failing = isTimedOut(aid_src.time_last_fuse, (uint64_t)4e5);
 
 				if (is_fusion_failing) {
 					resetFakePosFusion();
@@ -64,7 +93,9 @@ void Ekf::controlFakePosFusion()
 
 		} else {
 			if (starting_conditions_passing) {
-				startFakePosFusion();
+				ECL_INFO("start fake position fusion");
+				_control_status.flags.fake_pos = true;
+				resetFakePosFusion();
 
 				if (_control_status.flags.tilt_align) {
 					// The fake position fusion is not started for initial alignement
@@ -73,53 +104,29 @@ void Ekf::controlFakePosFusion()
 				}
 			}
 		}
-	}
-}
 
-void Ekf::startFakePosFusion()
-{
-	if (!_using_synthetic_position) {
-		_using_synthetic_position = true;
-		_fuse_hpos_as_odom = false; // TODO: needed?
-		resetFakePosFusion();
+	} else if (_control_status.flags.fake_pos && isHorizontalAidingActive()) {
+		stopFakePosFusion();
 	}
 }
 
 void Ekf::resetFakePosFusion()
 {
-	_last_known_posNE = _state.pos.xy();
-	resetHorizontalPosition();
-	resetVelocity();
-	_time_last_fake_pos_fuse = _time_last_imu;
+	ECL_INFO("reset fake position fusion");
+	_last_known_pos.xy() = _state.pos.xy();
+
+	resetHorizontalPositionToLastKnown();
+	resetHorizontalVelocityToZero();
+
+	_aid_src_fake_pos.time_last_fuse = _time_delayed_us;
 }
 
 void Ekf::stopFakePosFusion()
 {
-	_using_synthetic_position = false;
-}
+	if (_control_status.flags.fake_pos) {
+		ECL_INFO("stop fake position fusion");
+		_control_status.flags.fake_pos = false;
 
-void Ekf::fuseFakePosition()
-{
-	Vector3f fake_pos_obs_var;
-
-	if (_control_status.flags.in_air && _control_status.flags.tilt_align) {
-		fake_pos_obs_var(0) = fake_pos_obs_var(1) = sq(fmaxf(_params.pos_noaid_noise, _params.gps_pos_noise));
-
-	} else if (!_control_status.flags.in_air && _control_status.flags.vehicle_at_rest) {
-		// Accelerate tilt fine alignment by fusing more
-		// aggressively when the vehicle is at rest
-		fake_pos_obs_var(0) = fake_pos_obs_var(1) = sq(0.01f);
-
-	} else {
-		fake_pos_obs_var(0) = fake_pos_obs_var(1) = sq(0.5f);
-	}
-
-	_gps_pos_innov.xy() = Vector2f(_state.pos) - _last_known_posNE;
-
-	const float fake_pos_innov_gate = 3.f;
-
-	if (fuseHorizontalPosition(_gps_pos_innov, fake_pos_innov_gate, fake_pos_obs_var,
-	                           _gps_pos_innov_var, _gps_pos_test_ratio, true)) {
-		_time_last_fake_pos_fuse = _time_last_imu;
+		resetEstimatorAidStatus(_aid_src_fake_pos);
 	}
 }

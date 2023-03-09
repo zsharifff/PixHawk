@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013-2016, 2021 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2013-2021 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -50,6 +50,7 @@
 #include <drivers/drv_hrt.h>
 #include <lib/parameters/param.h>
 #include <lib/perf/perf_counter.h>
+#include <stdlib.h>
 
 #include "dataman.h"
 
@@ -57,7 +58,7 @@ __BEGIN_DECLS
 __EXPORT int dataman_main(int argc, char *argv[]);
 __END_DECLS
 
-static constexpr int TASK_STACK_SIZE = 1220;
+static constexpr int TASK_STACK_SIZE = 1320;
 
 /* Private File based Operations */
 static ssize_t _file_write(dm_item_t item, unsigned index, const void *buf, size_t count);
@@ -113,6 +114,7 @@ static struct {
 		} ram;
 	};
 	bool running;
+	bool silence = false;
 } dm_operations_data;
 
 /** Types of function calls supported by the worker task */
@@ -565,12 +567,12 @@ _file_read(dm_item_t item, unsigned index, void *buf, size_t count)
 	for (int i = 0; i < 2; i++) {
 		int ret_seek = lseek(dm_operations_data.file.fd, offset, SEEK_SET);
 
-		if (ret_seek < 0) {
+		if ((ret_seek < 0) && !dm_operations_data.silence) {
 			PX4_ERR("file read lseek failed %d", errno);
 			continue;
 		}
 
-		if (ret_seek != offset) {
+		if ((ret_seek != offset) && !dm_operations_data.silence) {
 			PX4_ERR("file read lseek failed, incorrect offset %d vs %d", ret_seek, offset);
 			continue;
 		}
@@ -584,7 +586,9 @@ _file_read(dm_item_t item, unsigned index, void *buf, size_t count)
 			break;
 
 		} else {
-			PX4_ERR("file read failed %d", errno);
+			if (!dm_operations_data.silence) {
+				PX4_ERR("file read failed %d", errno);
+			}
 		}
 	}
 
@@ -700,7 +704,9 @@ _file_initialize(unsigned max_offset)
 	if (dm_operations_data.file.fd >= 0) {
 		// Read the mission state and check the hash
 		struct dataman_compat_s compat_state;
+		dm_operations_data.silence = true;
 		int ret = g_dm_ops->read(DM_KEY_COMPAT, 0, &compat_state, sizeof(compat_state));
+		dm_operations_data.silence = false;
 
 		bool incompat = true;
 

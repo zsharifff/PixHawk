@@ -37,6 +37,7 @@
 #include <future>
 #include <thread>
 #include <unistd.h>
+#include <cmath>
 
 std::string connection_url {"udp://"};
 std::optional<float> speed_factor {std::nullopt};
@@ -64,7 +65,7 @@ void AutopilotTester::connect(const std::string uri)
 	REQUIRE(poll_condition_with_timeout(
 	[this]() { return _mavsdk.systems().size() > 0; }, std::chrono::seconds(25)));
 
-	auto system = _mavsdk.systems().at(0);
+	auto system = get_system();
 
 	_action.reset(new Action(system));
 	_failure.reset(new Failure(system));
@@ -79,27 +80,22 @@ void AutopilotTester::connect(const std::string uri)
 
 void AutopilotTester::wait_until_ready()
 {
-	std::cout << time_str() << "Waiting for system to be ready" << std::endl;
+	std::cout << time_str() << "Waiting for system to be ready (system health ok & able to arm)" << std::endl;
+
+	// Wiat until the system is healthy
 	CHECK(poll_condition_with_timeout(
 	[this]() { return _telemetry->health_all_ok(); }, std::chrono::seconds(30)));
 
-	// FIXME: workaround to prevent race between PX4 switching to Hold mode
-	// and us trying to arm and take off. If PX4 is not in Hold mode yet,
-	// our arming presumably triggers a failsafe in manual mode.
-	std::this_thread::sleep_for(std::chrono::seconds(1));
-}
+	// Note: There is a known bug in MAVSDK (https://github.com/mavlink/MAVSDK/issues/1852),
+	// where `health_all_ok()` returning true doesn't actually mean vehicle is ready to accept
+	// global position estimate as valid (due to hysteresis). This needs to be fixed properly.
 
-void AutopilotTester::wait_until_ready_local_position_only()
-{
-	std::cout << time_str() << "Waiting for system to be ready" << std::endl;
+	// However, this is mitigated by the `is_armable` check below as a side effect, since
+	// when the vehicle considers global position to be valid, it will then allow arming
+
+	// Wait until we can arm
 	CHECK(poll_condition_with_timeout(
-	[this]() {
-		return
-			(_telemetry->health().is_gyrometer_calibration_ok &&
-			 _telemetry->health().is_accelerometer_calibration_ok &&
-			 _telemetry->health().is_magnetometer_calibration_ok &&
-			 _telemetry->health().is_local_position_ok);
-	}, std::chrono::seconds(20)));
+	[this]() {	return _telemetry->health().is_armable;	}, std::chrono::seconds(20)));
 }
 
 void AutopilotTester::store_home()
@@ -131,15 +127,23 @@ void AutopilotTester::set_takeoff_altitude(const float altitude_m)
 	CHECK(result.second == Approx(altitude_m));
 }
 
+void AutopilotTester::set_rtl_altitude(const float altitude_m)
+{
+	CHECK(Action::Result::Success == _action->set_return_to_launch_altitude(altitude_m));
+	const auto result = _action->get_return_to_launch_altitude();
+	CHECK(result.first == Action::Result::Success);
+	CHECK(result.second == Approx(altitude_m));
+}
+
 void AutopilotTester::set_height_source(AutopilotTester::HeightSource height_source)
 {
 	switch (height_source) {
 	case HeightSource::Baro:
-		CHECK(_param->set_param_int("EKF2_HGT_MODE", 0) == Param::Result::Success);
+		CHECK(_param->set_param_int("EKF2_HGT_REF", 0) == Param::Result::Success);
 		break;
 
 	case HeightSource::Gps:
-		CHECK(_param->set_param_int("EKF2_HGT_MODE", 1) == Param::Result::Success);
+		CHECK(_param->set_param_int("EKF2_HGT_REF", 1) == Param::Result::Success);
 	}
 }
 
@@ -197,7 +201,22 @@ void AutopilotTester::wait_until_disarmed(std::chrono::seconds timeout_duration)
 
 void AutopilotTester::wait_until_hovering()
 {
-	wait_for_landed_state(Telemetry::LandedState::InAir, std::chrono::seconds(30));
+	wait_for_landed_state(Telemetry::LandedState::InAir, std::chrono::seconds(45));
+}
+
+void AutopilotTester::wait_until_altitude(float rel_altitude_m, std::chrono::seconds timeout)
+{
+	auto prom = std::promise<void> {};
+	auto fut = prom.get_future();
+
+	_telemetry->subscribe_position([&prom, rel_altitude_m, this](Telemetry::Position new_position) {
+		if (fabs(rel_altitude_m - new_position.relative_altitude_m) <= 0.5) {
+			_telemetry->subscribe_position(nullptr);
+			prom.set_value();
+		}
+	});
+
+	REQUIRE(fut.wait_for(timeout) == std::future_status::ready);
 }
 
 void AutopilotTester::prepare_square_mission(MissionOptions mission_options)
@@ -242,7 +261,7 @@ void AutopilotTester::execute_mission()
 
 	// TODO: Adapt time limit based on mission size, flight speed, sim speed factor, etc.
 
-	wait_for_mission_finished(std::chrono::seconds(60));
+	wait_for_mission_finished(std::chrono::seconds(90));
 }
 
 void AutopilotTester::execute_mission_and_lose_gps()
@@ -367,6 +386,11 @@ void AutopilotTester::execute_rtl()
 	REQUIRE(Action::Result::Success == _action->return_to_launch());
 }
 
+void AutopilotTester::execute_land()
+{
+	REQUIRE(Action::Result::Success == _action->land());
+}
+
 void AutopilotTester::offboard_goto(const Offboard::PositionNedYaw &target, float acceptance_radius_m,
 				    std::chrono::seconds timeout_duration)
 {
@@ -461,6 +485,22 @@ void AutopilotTester::fly_forward_in_altctl()
 	}
 }
 
+void AutopilotTester::start_checking_altitude(const float max_deviation_m)
+{
+	std::array<float, 3> initial_position = get_current_position_ned();
+	float target_altitude = initial_position[2];
+
+	_telemetry->subscribe_position([target_altitude, max_deviation_m, this](Telemetry::Position new_position) {
+		const float current_deviation = fabs((-target_altitude) - new_position.relative_altitude_m);
+		CHECK(current_deviation <= max_deviation_m);
+	});
+}
+
+void AutopilotTester::stop_checking_altitude()
+{
+	_telemetry->subscribe_position(nullptr);
+}
+
 void AutopilotTester::check_tracks_mission(float corridor_radius_m)
 {
 	auto mission = _mission->download_mission();
@@ -490,6 +530,17 @@ void AutopilotTester::check_tracks_mission(float corridor_radius_m)
 	});
 }
 
+void AutopilotTester::check_current_altitude(float target_rel_altitude_m, float max_distance_m)
+{
+	CHECK(std::abs(_telemetry->position().relative_altitude_m - target_rel_altitude_m) <= max_distance_m);
+}
+
+std::array<float, 3> AutopilotTester::get_current_position_ned()
+{
+	mavsdk::Telemetry::PositionVelocityNed position_velocity_ned = _telemetry->position_velocity_ned();
+	std::array<float, 3> position_ned{position_velocity_ned.position.north_m, position_velocity_ned.position.east_m, position_velocity_ned.position.down_m};
+	return position_ned;
+}
 
 void AutopilotTester::offboard_land()
 {
@@ -633,6 +684,27 @@ void AutopilotTester::wait_for_landed_state(Telemetry::LandedState landed_state,
 	_telemetry->subscribe_landed_state([&prom, landed_state, this](Telemetry::LandedState new_landed_state) {
 		if (new_landed_state == landed_state) {
 			_telemetry->subscribe_landed_state(nullptr);
+			prom.set_value();
+		}
+	});
+
+	REQUIRE(fut.wait_for(timeout) == std::future_status::ready);
+}
+
+void AutopilotTester::wait_until_speed_lower_than(float speed, std::chrono::seconds timeout)
+{
+	auto prom = std::promise<void> {};
+	auto fut = prom.get_future();
+
+	_telemetry->subscribe_position_velocity_ned([&prom, speed, this](Telemetry::PositionVelocityNed position_velocity_ned) {
+		std::array<float, 3> current_velocity;
+		current_velocity[0] = position_velocity_ned.velocity.north_m_s;
+		current_velocity[1] = position_velocity_ned.velocity.east_m_s;
+		current_velocity[2] = position_velocity_ned.velocity.down_m_s;
+		const float current_speed = norm(current_velocity);
+
+		if (current_speed <= speed) {
+			_telemetry->subscribe_position_velocity_ned(nullptr);
 			prom.set_value();
 		}
 	});

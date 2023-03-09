@@ -53,7 +53,12 @@ public:
 	// Setup the Ekf with synthetic measurements
 	void SetUp() override
 	{
+		// run briefly to init, then manually set in air and at rest (default for a real vehicle)
 		_ekf->init(0);
+		_sensor_simulator.runSeconds(0.1);
+		_ekf->set_in_air_status(false);
+		_ekf->set_vehicle_at_rest(true);
+
 		_sensor_simulator.runSeconds(_init_duration_s);
 	}
 
@@ -218,7 +223,7 @@ TEST_F(EkfBasicsTest, reset_ekf_global_origin_gps_initialized)
 	_sensor_simulator.setGpsLatitude(_latitude_new);
 	_sensor_simulator.setGpsLongitude(_longitude_new);
 	_sensor_simulator.setGpsAltitude(_altitude_new);
-	_sensor_simulator.runSeconds(2);
+	_sensor_simulator.runSeconds(5);
 
 	_ekf->getEkfGlobalOrigin(_origin_time, _latitude, _longitude, _altitude);
 
@@ -226,8 +231,9 @@ TEST_F(EkfBasicsTest, reset_ekf_global_origin_gps_initialized)
 	EXPECT_DOUBLE_EQ(_longitude, _longitude_new);
 	EXPECT_NEAR(_altitude, _altitude_new, 0.01f);
 
-	_latitude_new  = -15.0000005;
-	_longitude_new = -115.0000005;
+	// Note: we cannot reset too far since the local position is limited to 1e6m
+	_latitude_new  = 14.0000005;
+	_longitude_new = 109.0000005;
 	_altitude_new  = 1500.0;
 
 	_ekf->setEkfGlobalOrigin(_latitude_new, _longitude_new, _altitude_new);
@@ -237,16 +243,21 @@ TEST_F(EkfBasicsTest, reset_ekf_global_origin_gps_initialized)
 	EXPECT_DOUBLE_EQ(_longitude, _longitude_new);
 	EXPECT_FLOAT_EQ(_altitude, _altitude_new);
 
+	_sensor_simulator.runSeconds(1);
+
 	float hpos = 0.f;
 	float vpos = 0.f;
 	float hvel = 0.f;
 	float vvel = 0.f;
+	float baro_vpos = 0.f;
 
 	// After the change of origin, the pos and vel innovations should stay small
 	_ekf->getGpsVelPosInnovRatio(hvel, vvel, hpos, vpos);
+	_ekf->getBaroHgtInnovRatio(baro_vpos);
 
 	EXPECT_NEAR(hpos, 0.f, 0.05f);
 	EXPECT_NEAR(vpos, 0.f, 0.05f);
+	EXPECT_NEAR(baro_vpos, 0.f, 0.05f);
 
 	EXPECT_NEAR(hvel, 0.f, 0.02f);
 	EXPECT_NEAR(vvel, 0.f, 0.02f);
@@ -270,6 +281,8 @@ TEST_F(EkfBasicsTest, reset_ekf_global_origin_gps_uninitialized)
 	EXPECT_DOUBLE_EQ(_latitude, _latitude_new);
 	EXPECT_DOUBLE_EQ(_longitude, _longitude_new);
 	EXPECT_FLOAT_EQ(_altitude, _altitude_new);
+
+	_sensor_simulator.runSeconds(1);
 
 	float hpos = 0.f;
 	float vpos = 0.f;

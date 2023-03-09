@@ -9,7 +9,7 @@ functions:
 
     Motor:
       start: 101
-      count: 8
+      count: 12
     Servo:
       start: 201
       count: 8
@@ -33,6 +33,10 @@ functions:
     Gimbal_Roll: 420
     Gimbal_Pitch: 421
     Gimbal_Yaw: 422
+
+    Gripper: 430
+
+    Landing_Gear_Wheel: 440
 
     # Add your own here:
     #MyCustomFunction: 10000

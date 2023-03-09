@@ -41,9 +41,14 @@
 #include "uORBManager.hpp"
 #include "uORBCommon.hpp"
 
+
 #include <lib/drivers/device/Device.hpp>
 #include <matrix/Quaternion.hpp>
 #include <mathlib/mathlib.h>
+
+#ifdef __PX4_NUTTX
+#include <sys/boardctl.h>
+#endif
 
 static uORB::DeviceMaster *g_dev = nullptr;
 
@@ -60,6 +65,7 @@ int uorb_start(void)
 		return -ENOMEM;
 	}
 
+#if !defined(__PX4_NUTTX) || defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
 	/* create the driver */
 	g_dev = uORB::Manager::get_instance()->get_device_master();
 
@@ -67,11 +73,15 @@ int uorb_start(void)
 		return -errno;
 	}
 
+#endif
+
 	return OK;
 }
 
 int uorb_status(void)
 {
+#if !defined(__PX4_NUTTX) || defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+
 	if (g_dev != nullptr) {
 		g_dev->printStatistics();
 
@@ -79,11 +89,16 @@ int uorb_status(void)
 		PX4_INFO("uorb is not running");
 	}
 
+#else
+	boardctl(ORBIOCDEVMASTERCMD, ORB_DEVMASTER_STATUS);
+#endif
 	return OK;
 }
 
 int uorb_top(char **topic_filter, int num_filters)
 {
+#if !defined(__PX4_NUTTX) || defined(CONFIG_BUILD_FLAT) || defined(__KERNEL__)
+
 	if (g_dev != nullptr) {
 		g_dev->showTop(topic_filter, num_filters);
 
@@ -91,6 +106,9 @@ int uorb_top(char **topic_filter, int num_filters)
 		PX4_INFO("uorb is not running");
 	}
 
+#else
+	boardctl(ORBIOCDEVMASTERCMD, ORB_DEVMASTER_TOP);
+#endif
 	return OK;
 }
 
@@ -381,7 +399,7 @@ void orb_print_message_internal(const orb_metadata *meta, const void *data, bool
 				} else if (strstr(field_name, "flags") != nullptr) {
 					// bitfield
 					unsigned field_size = 0;
-					unsigned long value = 0;
+					uint64_t value = 0;
 
 					if (strcmp(c_type, "uint8_t") == 0) {
 						field_size = sizeof(uint8_t);
@@ -394,13 +412,24 @@ void orb_print_message_internal(const orb_metadata *meta, const void *data, bool
 					} else if (strcmp(c_type, "uint32_t") == 0) {
 						field_size = sizeof(uint32_t);
 						value = *(uint32_t *)(data_ptr + previous_data_offset);
+
+					} else if (strcmp(c_type, "uint64_t") == 0) {
+						field_size = sizeof(uint64_t);
+						value = *(uint64_t *)(data_ptr + previous_data_offset);
 					}
 
-					if (field_size > 0) {
+					if (field_size > 0 && value != 0) {
 						PX4_INFO_RAW(" (0b");
 
+						bool got_set_bit = false;
+
 						for (int i = (field_size * 8) - 1; i >= 0; i--) {
-							PX4_INFO_RAW("%lu%s", (value >> i) & 1, ((unsigned)i < (field_size * 8) - 1 && i % 4 == 0 && i > 0) ? "'" : "");
+							unsigned current_bit = (value >> i) & 1;
+							got_set_bit |= current_bit;
+
+							if (got_set_bit) {
+								PX4_INFO_RAW("%u%s", current_bit, ((unsigned)i < (field_size * 8) - 1 && i % 4 == 0 && i > 0) ? "'" : "");
+							}
 						}
 
 						PX4_INFO_RAW(")");

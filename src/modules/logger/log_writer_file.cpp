@@ -41,6 +41,7 @@
 #include <mathlib/mathlib.h>
 #include <px4_platform_common/posix.h>
 #include <px4_platform_common/crypto.h>
+#include <px4_platform_common/log.h>
 #ifdef __PX4_NUTTX
 #include <systemlib/hardfault_log.h>
 #endif /* __PX4_NUTTX */
@@ -287,7 +288,9 @@ int LogWriterFile::hardfault_store_filename(const char *log_file)
 
 void LogWriterFile::stop_log(LogType type)
 {
+	lock();
 	_buffers[(int)type]._should_run = false;
+	unlock();
 	notify();
 }
 
@@ -312,8 +315,10 @@ int LogWriterFile::thread_start()
 void LogWriterFile::thread_stop()
 {
 	// this will terminate the main loop of the writer thread
-	_exit_thread = true;
+	lock();
+	_exit_thread.store(true);
 	_buffers[0]._should_run = _buffers[1]._should_run = false;
+	unlock();
 
 	notify();
 
@@ -335,10 +340,10 @@ void *LogWriterFile::run_helper(void *context)
 
 void LogWriterFile::run()
 {
-	while (!_exit_thread) {
+	while (!_exit_thread.load()) {
 		// Outer endless loop
 		// Wait for _should_run flag
-		while (!_exit_thread) {
+		while (!_exit_thread.load()) {
 			bool start = false;
 			pthread_mutex_lock(&_mtx);
 			pthread_cond_wait(&_cv, &_mtx);
@@ -350,7 +355,7 @@ void LogWriterFile::run()
 			}
 		}
 
-		if (_exit_thread) {
+		if (_exit_thread.load()) {
 			break;
 		}
 
@@ -364,7 +369,8 @@ void LogWriterFile::run()
 			const hrt_abstime now = hrt_absolute_time();
 
 			/* call fsync periodically to minimize potential loss of data */
-			const bool call_fsync = ++poll_count >= 100 || now - last_fsync > 1_s;
+			const bool call_fsync = ++poll_count >= 100 || now - last_fsync > 1_s || _want_fsync.load();
+			_want_fsync.store(false);
 
 			if (call_fsync) {
 				last_fsync = now;
@@ -438,13 +444,19 @@ void LogWriterFile::run()
 
 						if (!buffer._should_run && written == static_cast<int>(available) && !is_part) {
 							/* Stop only when all data written */
+							pthread_mutex_unlock(&_mtx);
 							buffer.close_file();
+							pthread_mutex_lock(&_mtx);
+							buffer.reset();
 						}
 
 					} else {
 						PX4_ERR("write failed (%i)", errno);
 						buffer._should_run = false;
+						pthread_mutex_unlock(&_mtx);
 						buffer.close_file();
+						pthread_mutex_lock(&_mtx);
+						buffer.reset();
 					}
 
 				} else if (call_fsync && buffer._should_run) {
@@ -453,7 +465,10 @@ void LogWriterFile::run()
 					pthread_mutex_lock(&_mtx);
 
 				} else if (available == 0 && !buffer._should_run) {
+					pthread_mutex_unlock(&_mtx);
 					buffer.close_file();
+					pthread_mutex_lock(&_mtx);
+					buffer.reset();
 				}
 
 				/* if split into 2 parts, write the second part immediately as well */
@@ -480,7 +495,7 @@ void LogWriterFile::run()
 			 * not an issue because notify() is called regularly.
 			 * If the logger was switched off in the meantime, do not wait for data, instead run this loop
 			 * once more to write remaining data and close the file. */
-			if (_buffers[0]._should_run) {
+			if (_buffers[0]._should_run || _buffers[1]._should_run) {
 				pthread_cond_wait(&_cv, &_mtx);
 			}
 		}
@@ -682,12 +697,8 @@ ssize_t LogWriterFile::LogFileBuffer::write_to_file(const void *buffer, size_t s
 
 void LogWriterFile::LogFileBuffer::close_file()
 {
-	_head = 0;
-	_count = 0;
-
 	if (_fd >= 0) {
 		int res = close(_fd);
-		_fd = -1;
 
 		if (res) {
 			PX4_WARN("closing log file failed (%i)", errno);
@@ -696,6 +707,13 @@ void LogWriterFile::LogFileBuffer::close_file()
 			PX4_INFO("closed logfile, bytes written: %zu", _total_written);
 		}
 	}
+}
+
+void LogWriterFile::LogFileBuffer::reset()
+{
+	_head = 0;
+	_count = 0;
+	_fd = -1;
 }
 
 }

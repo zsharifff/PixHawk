@@ -160,6 +160,9 @@ stm32_boardinitialize(void)
 
 	board_control_spi_sensors_power_configgpio();
 
+	/* Turn bluetooth off by default (no mavlink support yet) */
+	px4_arch_gpiowrite(GPIO_RF_SWITCH, 0);
+
 	/* configure USB interfaces */
 
 	stm32_usbinitialize();
@@ -237,8 +240,7 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	int result = mmcsd_spislotinitialize(CONFIG_NSH_MMCSDMINOR, CONFIG_NSH_MMCSDSLOTNO, spi_dev);
 
 	if (result != OK) {
-		led_on(LED_BLUE);
-		syslog(LOG_ERR, "[boot] FAILED to bind SPI port 1 to the MMCSD driver\n");
+		syslog(LOG_ERR, "[boot] Could not bind MMCSD driver, expected on Kakute H7 V2\n");
 	}
 
 	up_udelay(20);

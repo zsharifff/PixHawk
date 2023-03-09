@@ -43,32 +43,38 @@ ActuatorEffectivenessFixedWing::ActuatorEffectivenessFixedWing(ModuleParams *par
 }
 
 bool
-ActuatorEffectivenessFixedWing::getEffectivenessMatrix(Configuration &configuration, bool force)
+ActuatorEffectivenessFixedWing::getEffectivenessMatrix(Configuration &configuration,
+		EffectivenessUpdateReason external_update)
 {
-	if (!force) {
+	if (external_update == EffectivenessUpdateReason::NO_EXTERNAL_UPDATE) {
 		return false;
 	}
 
 	// Motors
-	_rotors.enableYawControl(false);
-	_rotors.getEffectivenessMatrix(configuration, true);
+	_rotors.enablePropellerTorque(false);
+	const bool rotors_added_successfully = _rotors.addActuators(configuration);
 
 	// Control Surfaces
 	_first_control_surface_idx = configuration.num_actuators_matrix[0];
-	_control_surfaces.getEffectivenessMatrix(configuration, true);
+	const bool surfaces_added_successfully = _control_surfaces.addActuators(configuration);
 
-	return true;
+	return (rotors_added_successfully && surfaces_added_successfully);
 }
 
-void ActuatorEffectivenessFixedWing::updateSetpoint(const matrix::Vector<float, NUM_AXES> &control_sp,
-		int matrix_index, ActuatorVector &actuator_sp)
+void ActuatorEffectivenessFixedWing::allocateAuxilaryControls(const float dt, int matrix_index,
+		ActuatorVector &actuator_sp)
 {
 	// apply flaps
-	actuator_controls_s actuator_controls_0;
+	normalized_unsigned_setpoint_s flaps_setpoint;
 
-	if (_actuator_controls_0_sub.copy(&actuator_controls_0)) {
-		float control_flaps = actuator_controls_0.control[actuator_controls_s::INDEX_FLAPS];
-		float airbrakes_control = actuator_controls_0.control[actuator_controls_s::INDEX_AIRBRAKES];
-		_control_surfaces.applyFlapsAndAirbrakes(control_flaps, airbrakes_control, _first_control_surface_idx, actuator_sp);
+	if (_flaps_setpoint_sub.copy(&flaps_setpoint)) {
+		_control_surfaces.applyFlaps(flaps_setpoint.normalized_setpoint, _first_control_surface_idx, dt, actuator_sp);
+	}
+
+	// apply spoilers
+	normalized_unsigned_setpoint_s spoilers_setpoint;
+
+	if (_spoilers_setpoint_sub.copy(&spoilers_setpoint)) {
+		_control_surfaces.applySpoilers(spoilers_setpoint.normalized_setpoint, _first_control_surface_idx, dt, actuator_sp);
 	}
 }

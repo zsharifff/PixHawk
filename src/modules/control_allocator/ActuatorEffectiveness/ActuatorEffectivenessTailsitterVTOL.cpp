@@ -47,24 +47,46 @@ ActuatorEffectivenessTailsitterVTOL::ActuatorEffectivenessTailsitterVTOL(ModuleP
 	setFlightPhase(FlightPhase::HOVER_FLIGHT);
 }
 bool
-ActuatorEffectivenessTailsitterVTOL::getEffectivenessMatrix(Configuration &configuration, bool force)
+ActuatorEffectivenessTailsitterVTOL::getEffectivenessMatrix(Configuration &configuration,
+		EffectivenessUpdateReason external_update)
 {
-	if (!force) {
+	if (external_update == EffectivenessUpdateReason::NO_EXTERNAL_UPDATE) {
 		return false;
 	}
 
 	// MC motors
 	configuration.selected_matrix = 0;
-	_mc_rotors.enableYawControl(_mc_rotors.geometry().num_rotors > 3); // enable MC yaw control if more than 3 rotors
-
-	_mc_rotors.getEffectivenessMatrix(configuration, true);
+	// enable MC yaw control if more than 3 rotors
+	_mc_rotors.enableYawByDifferentialThrust(_mc_rotors.geometry().num_rotors > 3);
+	const bool mc_rotors_added_successfully = _mc_rotors.addActuators(configuration);
 
 	// Control Surfaces
 	configuration.selected_matrix = 1;
 	_first_control_surface_idx = configuration.num_actuators_matrix[configuration.selected_matrix];
-	_control_surfaces.getEffectivenessMatrix(configuration, true);
+	const bool surfaces_added_successfully = _control_surfaces.addActuators(configuration);
 
-	return true;
+	return (mc_rotors_added_successfully && surfaces_added_successfully);
+}
+
+void ActuatorEffectivenessTailsitterVTOL::allocateAuxilaryControls(const float dt, int matrix_index,
+		ActuatorVector &actuator_sp)
+{
+	if (matrix_index == 1) {
+		// apply flaps
+		normalized_unsigned_setpoint_s flaps_setpoint;
+
+		if (_flaps_setpoint_sub.copy(&flaps_setpoint)) {
+			_control_surfaces.applyFlaps(flaps_setpoint.normalized_setpoint, _first_control_surface_idx, dt, actuator_sp);
+		}
+
+		// apply spoilers
+		normalized_unsigned_setpoint_s spoilers_setpoint;
+
+		if (_spoilers_setpoint_sub.copy(&spoilers_setpoint)) {
+			_control_surfaces.applySpoilers(spoilers_setpoint.normalized_setpoint, _first_control_surface_idx, dt, actuator_sp);
+		}
+	}
+
 }
 
 void ActuatorEffectivenessTailsitterVTOL::setFlightPhase(const FlightPhase &flight_phase)

@@ -76,7 +76,7 @@ public:
 	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
 	 * @param instance The instance for multi sub.
 	 */
-	Subscription(const orb_metadata *meta, uint8_t instance = 0) :
+	Subscription(const orb_metadata *meta = nullptr, uint8_t instance = 0) :
 		_orb_id((meta == nullptr) ? ORB_ID::INVALID : static_cast<ORB_ID>(meta->o_id)),
 		_instance(instance)
 	{
@@ -136,19 +136,40 @@ public:
 	/**
 	 * Check if there is a new update.
 	 */
-	bool updated() { return advertised() && Manager::updates_available(_node, _last_generation); }
+	bool updated()
+	{
+		if (!valid()) {
+			subscribe();
+		}
+
+		return valid() ? Manager::updates_available(_node, _last_generation) : false;
+	}
 
 	/**
 	 * Update the struct
 	 * @param dst The uORB message struct we are updating.
 	 */
-	bool update(void *dst) { return updated() && Manager::orb_data_copy(_node, dst, _last_generation); }
+	bool update(void *dst)
+	{
+		if (!valid()) {
+			subscribe();
+		}
+
+		return valid() ? Manager::orb_data_copy(_node, dst, _last_generation, true) : false;
+	}
 
 	/**
 	 * Copy the struct
 	 * @param dst The uORB message struct we are updating.
 	 */
-	bool copy(void *dst) { return advertised() && Manager::orb_data_copy(_node, dst, _last_generation); }
+	bool copy(void *dst)
+	{
+		if (!valid()) {
+			subscribe();
+		}
+
+		return valid() ? Manager::orb_data_copy(_node, dst, _last_generation, false) : false;
+	}
 
 	/**
 	 * Change subscription instance
@@ -159,6 +180,8 @@ public:
 	uint8_t  get_instance() const { return _instance; }
 	unsigned get_last_generation() const { return _last_generation; }
 	orb_id_t get_topic() const { return get_orb_meta(_orb_id); }
+
+	ORB_ID orb_id() const { return _orb_id; }
 
 protected:
 

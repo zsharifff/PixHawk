@@ -58,7 +58,12 @@ public:
 	// Setup the Ekf with synthetic measurements
 	void SetUp() override
 	{
+		// run briefly to init, then manually set in air and at rest (default for a real vehicle)
 		_ekf->init(0);
+		_sensor_simulator.runSeconds(0.1);
+		_ekf->set_in_air_status(false);
+		_ekf->set_vehicle_at_rest(true);
+
 		_sensor_simulator.runSeconds(2);
 		_ekf_wrapper.enableGpsFusion();
 		_sensor_simulator.startGps();
@@ -104,11 +109,16 @@ TEST_F(EkfGpsTest, resetToGpsVelocity)
 	const uint64_t dt_us = 1e5;
 	_sensor_simulator._gps.stepHorizontalPositionByMeters(Vector2f(simulated_velocity) * dt_us * 1e-6);
 	_sensor_simulator._gps.stepHeightByMeters(simulated_velocity(2) * dt_us * 1e-6f);
+
+	_ekf->set_in_air_status(true);
+	_ekf->set_vehicle_at_rest(false);
 	_sensor_simulator.runMicroseconds(dt_us);
 
 	// THEN: a reset to GPS velocity should be done
 	const Vector3f estimated_velocity = _ekf->getVelocity();
-	EXPECT_TRUE(isEqual(estimated_velocity, simulated_velocity, 1e-2f));
+	EXPECT_NEAR(estimated_velocity(0), simulated_velocity(0), 1e-3f);
+	EXPECT_NEAR(estimated_velocity(1), simulated_velocity(1), 1e-3f);
+	EXPECT_NEAR(estimated_velocity(2), simulated_velocity(2), 1e-3f);
 
 	// AND: the reset in velocity should be saved correctly
 	reset_logging_checker.capturePostResetState();
@@ -147,12 +157,12 @@ TEST_F(EkfGpsTest, gpsHgtToBaroFallback)
 	_ekf_wrapper.enableFlowFusion();
 	_sensor_simulator.startFlow();
 
-	_ekf_wrapper.setGpsHeight();
+	_ekf_wrapper.enableGpsHeightFusion();
 
 	_sensor_simulator.runSeconds(1);
 	EXPECT_TRUE(_ekf_wrapper.isIntendingGpsHeightFusion());
 	EXPECT_TRUE(_ekf_wrapper.isIntendingFlowFusion());
-	EXPECT_FALSE(_ekf_wrapper.isIntendingBaroHeightFusion());
+	EXPECT_TRUE(_ekf_wrapper.isIntendingBaroHeightFusion());
 
 	// WHEN: stopping GPS fusion
 	_sensor_simulator.stopGps();
@@ -161,4 +171,28 @@ TEST_F(EkfGpsTest, gpsHgtToBaroFallback)
 	// THEN: the height source should automatically change to baro
 	EXPECT_FALSE(_ekf_wrapper.isIntendingGpsHeightFusion());
 	EXPECT_TRUE(_ekf_wrapper.isIntendingBaroHeightFusion());
+}
+
+TEST_F(EkfGpsTest, altitudeDrift)
+{
+	// GIVEN: a drifting GNSS altitude
+	const float dt = 0.2f;
+	const float height_rate = 0.15f;
+	const float duration = 80.f;
+
+	// WHEN: running on ground
+	for (int i = 0; i < (duration / dt); i++) {
+		_sensor_simulator._gps.stepHeightByMeters(height_rate * dt);
+		_sensor_simulator.runSeconds(dt);
+	}
+
+	float baro_innov;
+	_ekf->getBaroHgtInnov(baro_innov);
+	BiasEstimator::status status = _ekf->getBaroBiasEstimatorStatus();
+
+	printf("baro innov = %f\n", (double)baro_innov);
+	printf("bias: %f, innov bias = %f\n", (double)status.bias, (double)status.innov);
+
+	// THEN: the baro and local position should follow it
+	EXPECT_LT(fabsf(baro_innov), 0.1f);
 }

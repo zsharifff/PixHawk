@@ -37,48 +37,48 @@
 using namespace matrix;
 
 ActuatorEffectivenessStandardVTOL::ActuatorEffectivenessStandardVTOL(ModuleParams *parent)
-	: ModuleParams(parent), _mc_rotors(this), _control_surfaces(this)
+	: ModuleParams(parent), _rotors(this), _control_surfaces(this)
 {
 }
 
 bool
-ActuatorEffectivenessStandardVTOL::getEffectivenessMatrix(Configuration &configuration, bool force)
+ActuatorEffectivenessStandardVTOL::getEffectivenessMatrix(Configuration &configuration,
+		EffectivenessUpdateReason external_update)
 {
-	if (!force) {
+	if (external_update == EffectivenessUpdateReason::NO_EXTERNAL_UPDATE) {
 		return false;
 	}
 
-	// MC motors
+	// Motors
 	configuration.selected_matrix = 0;
-	_mc_rotors.getEffectivenessMatrix(configuration, true);
-	_mc_motors_mask = (1u << _mc_rotors.geometry().num_rotors) - 1;
-
-	// Pusher/Puller
-	configuration.selected_matrix = 1;
-
-	for (int i = 0; i < _param_ca_stdvtol_n_p.get(); ++i) {
-		configuration.addActuator(ActuatorType::MOTORS, Vector3f{}, Vector3f{1.f, 0.f, 0.f});
-	}
+	_rotors.enablePropellerTorqueNonUpwards(false);
+	const bool mc_rotors_added_successfully = _rotors.addActuators(configuration);
+	_mc_motors_mask = _rotors.getUpwardsMotors();
 
 	// Control Surfaces
 	configuration.selected_matrix = 1;
 	_first_control_surface_idx = configuration.num_actuators_matrix[configuration.selected_matrix];
-	_control_surfaces.getEffectivenessMatrix(configuration, true);
+	const bool surfaces_added_successfully = _control_surfaces.addActuators(configuration);
 
-	return true;
+	return (mc_rotors_added_successfully && surfaces_added_successfully);
 }
 
-void ActuatorEffectivenessStandardVTOL::updateSetpoint(const matrix::Vector<float, NUM_AXES> &control_sp,
-		int matrix_index, ActuatorVector &actuator_sp)
+void ActuatorEffectivenessStandardVTOL::allocateAuxilaryControls(const float dt, int matrix_index,
+		ActuatorVector &actuator_sp)
 {
-	// apply flaps
 	if (matrix_index == 1) {
-		actuator_controls_s actuator_controls_1;
+		// apply flaps
+		normalized_unsigned_setpoint_s flaps_setpoint;
 
-		if (_actuator_controls_1_sub.copy(&actuator_controls_1)) {
-			float control_flaps = actuator_controls_1.control[actuator_controls_s::INDEX_FLAPS];
-			float airbrakes_control = actuator_controls_1.control[actuator_controls_s::INDEX_AIRBRAKES];
-			_control_surfaces.applyFlapsAndAirbrakes(control_flaps, airbrakes_control, _first_control_surface_idx, actuator_sp);
+		if (_flaps_setpoint_sub.copy(&flaps_setpoint)) {
+			_control_surfaces.applyFlaps(flaps_setpoint.normalized_setpoint, _first_control_surface_idx, dt, actuator_sp);
+		}
+
+		// apply spoilers
+		normalized_unsigned_setpoint_s spoilers_setpoint;
+
+		if (_spoilers_setpoint_sub.copy(&spoilers_setpoint)) {
+			_control_surfaces.applySpoilers(spoilers_setpoint.normalized_setpoint, _first_control_surface_idx, dt, actuator_sp);
 		}
 	}
 }

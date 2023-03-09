@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2017, 2021 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2017-2021 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,8 +45,6 @@
 #include "RoverPositionControl.hpp"
 #include <lib/geo/geo.h>
 
-#define ACTUATOR_PUBLISH_PERIOD_MS 4
-
 using namespace matrix;
 
 /**
@@ -73,7 +71,7 @@ bool
 RoverPositionControl::init()
 {
 	if (!_vehicle_angular_velocity_sub.registerCallback()) {
-		PX4_ERR("vehicle angular velocity callback registration failed!");
+		PX4_ERR("callback registration failed");
 		return false;
 	}
 
@@ -93,7 +91,6 @@ void RoverPositionControl::parameters_update(bool force)
 
 		_gnd_control.set_l1_damping(_param_l1_damping.get());
 		_gnd_control.set_l1_period(_param_l1_period.get());
-		_gnd_control.set_l1_roll_limit(math::radians(0.0f));
 
 		pid_init(&_speed_ctrl, PID_MODE_DERIVATIV_CALC, 0.01f);
 		pid_set_parameters(&_speed_ctrl,
@@ -136,12 +133,12 @@ RoverPositionControl::manual_control_setpoint_poll()
 
 					} else {
 						const float yaw_rate = math::radians(_param_gnd_man_y_max.get());
-						_att_sp.yaw_sp_move_rate = _manual_control_setpoint.y * yaw_rate;
+						_att_sp.yaw_sp_move_rate = _manual_control_setpoint.roll * yaw_rate;
 						_manual_yaw_sp = wrap_pi(_manual_yaw_sp + _att_sp.yaw_sp_move_rate * dt);
 					}
 
 					_att_sp.yaw_body = _manual_yaw_sp;
-					_att_sp.thrust_body[0] = _manual_control_setpoint.z;
+					_att_sp.thrust_body[0] = (_manual_control_setpoint.throttle + 1.f) * .5f;
 
 					Quatf q(Eulerf(_att_sp.roll_body, _att_sp.pitch_body, _att_sp.yaw_body));
 					q.copyTo(_att_sp.q_d);
@@ -152,13 +149,13 @@ RoverPositionControl::manual_control_setpoint_poll()
 					_attitude_sp_pub.publish(_att_sp);
 
 				} else {
-					_act_controls.control[actuator_controls_s::INDEX_ROLL] = 0.0f; // Nominally roll: _manual_control_setpoint.y;
-					_act_controls.control[actuator_controls_s::INDEX_PITCH] = 0.0f; // Nominally pitch: -_manual_control_setpoint.x;
+					_act_controls.control[actuator_controls_s::INDEX_ROLL] = 0.0f; // Nominally roll: _manual_control_setpoint.roll;
+					_act_controls.control[actuator_controls_s::INDEX_PITCH] = 0.0f; // Nominally pitch: -_manual_control_setpoint.pitch;
 					// Set heading from the manual roll input channel
 					_act_controls.control[actuator_controls_s::INDEX_YAW] =
-						_manual_control_setpoint.y; // Nominally yaw: _manual_control_setpoint.r;
+						_manual_control_setpoint.roll; // Nominally yaw: _manual_control_setpoint.yaw;
 					// Set throttle from the manual throttle channel
-					_act_controls.control[actuator_controls_s::INDEX_THROTTLE] = _manual_control_setpoint.z;
+					_act_controls.control[actuator_controls_s::INDEX_THROTTLE] = (_manual_control_setpoint.throttle + 1.f) * .5f;
 					_reset_yaw_sp = true;
 				}
 
@@ -215,9 +212,6 @@ RoverPositionControl::control_position(const matrix::Vector2d &current_position,
 
 		_control_mode_current = UGV_POSCTRL_MODE_AUTO;
 
-		/* get circle mode */
-		//bool was_circle_mode = _gnd_control.circle_mode();
-
 		/* current waypoint (the one currently heading for) */
 		matrix::Vector2d curr_wp(pos_sp_triplet.current.lat, pos_sp_triplet.current.lon);
 
@@ -270,18 +264,17 @@ RoverPositionControl::control_position(const matrix::Vector2d &current_position,
 		float dist_target = get_distance_to_next_waypoint(_global_pos.lat, _global_pos.lon,
 				    (double)curr_wp(0), (double)curr_wp(1)); // pos_sp_triplet.current.lat, pos_sp_triplet.current.lon);
 
-		//PX4_INFO("Setpoint type %d", (int) pos_sp_triplet.current.type );
-		//PX4_INFO(" State machine state %d", (int) _pos_ctrl_state);
-		//PX4_INFO(" Setpoint Lat %f, Lon %f", (double) curr_wp(0), (double)curr_wp(1));
-		//PX4_INFO(" Distance to target %f", (double) dist_target);
-
 		switch (_pos_ctrl_state) {
 		case GOTO_WAYPOINT: {
 				if (dist_target < _param_nav_loiter_rad.get()) {
 					_pos_ctrl_state = STOPPING;  // We are closer than loiter radius to waypoint, stop.
 
 				} else {
-					_gnd_control.navigate_waypoints(prev_wp, curr_wp, current_position, ground_speed_2d);
+					Vector2f curr_pos_local{_local_pos.x, _local_pos.y};
+					Vector2f curr_wp_local = _global_local_proj_ref.project(curr_wp(0), curr_wp(1));
+					Vector2f prev_wp_local = _global_local_proj_ref.project(prev_wp(0),
+								 prev_wp(1));
+					_gnd_control.navigate_waypoints(prev_wp_local, curr_wp_local, curr_pos_local, ground_speed_2d);
 
 					_act_controls.control[actuator_controls_s::INDEX_THROTTLE] = mission_throttle;
 
@@ -305,8 +298,6 @@ RoverPositionControl::control_position(const matrix::Vector2d &current_position,
 				if (dist_between_waypoints > 0) {
 					_pos_ctrl_state = GOTO_WAYPOINT; // A new waypoint has arrived go to it
 				}
-
-				//PX4_INFO(" Distance between prev and curr waypoints %f", (double)dist_between_waypoints);
 			}
 			break;
 
@@ -329,7 +320,7 @@ RoverPositionControl::control_position(const matrix::Vector2d &current_position,
 void
 RoverPositionControl::control_velocity(const matrix::Vector3f &current_velocity)
 {
-	const Vector3f desired_velocity{_trajectory_setpoint.vx, _trajectory_setpoint.vy, _trajectory_setpoint.vz};
+	const Vector3f desired_velocity{_trajectory_setpoint.velocity};
 	float dt = 0.01; // Using non zero value to a avoid division by zero
 
 	const float mission_throttle = _param_throttle_cruise.get();
@@ -417,25 +408,22 @@ RoverPositionControl::Run()
 
 			position_setpoint_triplet_poll();
 
+			if (!_global_local_proj_ref.isInitialized()
+			    || (_global_local_proj_ref.getProjectionReferenceTimestamp() != _local_pos.ref_timestamp)) {
+
+				_global_local_proj_ref.initReference(_local_pos.ref_lat, _local_pos.ref_lon,
+								     _local_pos.ref_timestamp);
+			}
+
 			// Convert Local setpoints to global setpoints
 			if (_control_mode.flag_control_offboard_enabled) {
-				if (!_global_local_proj_ref.isInitialized()
-				    || (_global_local_proj_ref.getProjectionReferenceTimestamp() != _local_pos.ref_timestamp)) {
-
-					_global_local_proj_ref.initReference(_local_pos.ref_lat, _local_pos.ref_lon,
-									     _local_pos.ref_timestamp);
-
-					_global_local_alt0 = _local_pos.ref_alt;
-				}
-
 				_trajectory_setpoint_sub.update(&_trajectory_setpoint);
 
 				// local -> global
 				_global_local_proj_ref.reproject(
-					_trajectory_setpoint.x, _trajectory_setpoint.y,
+					_trajectory_setpoint.position[0], _trajectory_setpoint.position[1],
 					_pos_sp_triplet.current.lat, _pos_sp_triplet.current.lon);
 
-				_pos_sp_triplet.current.alt = _global_local_alt0 - _trajectory_setpoint.z;
 				_pos_sp_triplet.current.valid = true;
 			}
 
@@ -451,7 +439,7 @@ RoverPositionControl::Run()
 				if (control_position(current_position, ground_speed, _pos_sp_triplet)) {
 
 					//TODO: check if radius makes sense here
-					float turn_distance = _param_l1_distance.get(); //_gnd_control.switch_distance(100.0f);
+					float turn_distance = _param_l1_distance.get();
 
 					// publish status
 					position_controller_status_s pos_ctrl_status{};

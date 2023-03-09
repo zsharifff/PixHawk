@@ -133,6 +133,8 @@
 
 #define GPIO_RSSI_IN                       /* PC5  */ (GPIO_INPUT|GPIO_PULLDOWN|GPIO_PORTC|GPIO_PIN5)
 
+#define GPIO_RF_SWITCH                     /* PE13  */ (GPIO_OUTPUT|GPIO_PULLDOWN|GPIO_PORTE|GPIO_PIN13)
+
 /* Power switch controls ******************************************************/
 
 #define SDIO_SLOTNO                    0  /* Only one slot */
@@ -141,11 +143,11 @@
 /* SD card bringup does not work if performed on the IDLE thread because it
  * will cause waiting.  Use either:
  *
- *  CONFIG_LIB_BOARDCTL=y, OR
+ *  CONFIG_BOARDCTL=y, OR
  *  CONFIG_BOARD_INITIALIZE=y && CONFIG_BOARD_INITTHREAD=y
  */
 
-#if defined(CONFIG_BOARD_INITIALIZE) && !defined(CONFIG_LIB_BOARDCTL) && \
+#if defined(CONFIG_BOARD_INITIALIZE) && !defined(CONFIG_BOARDCTL) && \
    !defined(CONFIG_BOARD_INITTHREAD)
 #  warning SDIO initialization cannot be perfomed on the IDLE thread
 #endif
@@ -175,12 +177,12 @@
 		PX4_ADC_GPIO,                     \
 		GPIO_TONE_ALARM_IDLE,             \
 		GPIO_RSSI_IN,                     \
+		GPIO_RF_SWITCH,                   \
 	}
 
 #define BOARD_ENABLE_CONSOLE_BUFFER
 
-// not working on h7 yet, due to ECC
-//#define FLASH_BASED_PARAMS
+#define FLASH_BASED_PARAMS
 
 __BEGIN_DECLS
 
