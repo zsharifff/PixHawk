@@ -92,45 +92,45 @@ void ActuatorEffectivenessRotors::updateParams()
 
 	if (param_get(_count_handle, &count) != 0) {
 		PX4_ERR("param_get failed");
-		return;
-	}
 
-	_geometry.num_rotors = math::min(NUM_ROTORS_MAX, (int)count);
+	} else {
+		_geometry.num_rotors = math::min(NUM_ROTORS_MAX, (int)count);
 
-	for (int i = 0; i < _geometry.num_rotors; ++i) {
-		Vector3f &position = _geometry.rotors[i].position;
-		param_get(_param_handles[i].position_x, &position(0));
-		param_get(_param_handles[i].position_y, &position(1));
-		param_get(_param_handles[i].position_z, &position(2));
+		for (int i = 0; i < _geometry.num_rotors; ++i) {
+			Vector3f &position = _geometry.rotors[i].position;
+			param_get(_param_handles[i].position_x, &position(0));
+			param_get(_param_handles[i].position_y, &position(1));
+			param_get(_param_handles[i].position_z, &position(2));
 
-		Vector3f &axis = _geometry.rotors[i].axis;
+			Vector3f &axis = _geometry.rotors[i].axis;
 
-		switch (_axis_config) {
-		case AxisConfiguration::Configurable:
-			param_get(_param_handles[i].axis_x, &axis(0));
-			param_get(_param_handles[i].axis_y, &axis(1));
-			param_get(_param_handles[i].axis_z, &axis(2));
-			break;
+			switch (_axis_config) {
+			case AxisConfiguration::Configurable:
+				param_get(_param_handles[i].axis_x, &axis(0));
+				param_get(_param_handles[i].axis_y, &axis(1));
+				param_get(_param_handles[i].axis_z, &axis(2));
+				break;
 
-		case AxisConfiguration::FixedForward:
-			axis = Vector3f(1.f, 0.f, 0.f);
-			break;
+			case AxisConfiguration::FixedForward:
+				axis = Vector3f(1.f, 0.f, 0.f);
+				break;
 
-		case AxisConfiguration::FixedUpwards:
-			axis = Vector3f(0.f, 0.f, -1.f);
-			break;
-		}
+			case AxisConfiguration::FixedUpwards:
+				axis = Vector3f(0.f, 0.f, -1.f);
+				break;
+			}
 
-		param_get(_param_handles[i].thrust_coef, &_geometry.rotors[i].thrust_coef);
-		param_get(_param_handles[i].moment_ratio, &_geometry.rotors[i].moment_ratio);
+			param_get(_param_handles[i].thrust_coef, &_geometry.rotors[i].thrust_coef);
+			param_get(_param_handles[i].moment_ratio, &_geometry.rotors[i].moment_ratio);
 
-		if (_tilt_support) {
-			int32_t tilt_param{0};
-			param_get(_param_handles[i].tilt_index, &tilt_param);
-			_geometry.rotors[i].tilt_index = tilt_param - 1;
+			if (_tilt_support) {
+				int32_t tilt_param{0};
+				param_get(_param_handles[i].tilt_index, &tilt_param);
+				_geometry.rotors[i].tilt_index = tilt_param - 1;
 
-		} else {
-			_geometry.rotors[i].tilt_index = -1;
+			} else {
+				_geometry.rotors[i].tilt_index = -1;
+			}
 		}
 	}
 }
