@@ -58,8 +58,9 @@ protected:
 			CHECK_FAILSAFE(status_flags, mission_failure, Action::Descend);
 		}
 
+		const Action high_wind_action = Action::RTL;
 		CHECK_FAILSAFE(status_flags, wind_limit_exceeded,
-			       ActionOptions(Action::RTL).allowUserTakeover(UserTakeoverAllowed::Never));
+			       ActionOptions(high_wind_action).allowUserTakeover(UserTakeoverAllowed::Never));
 
 		_last_state_test = checkFailsafe(_caller_id_test, _last_state_test, status_flags.fd_motor_failure
 						 && status_flags.fd_critical_failure, ActionOptions(Action::Terminate).cannotBeDeferred());
