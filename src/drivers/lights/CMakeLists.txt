@@ -34,4 +34,5 @@
 #add_subdirectory(neopixel) # requires board support (BOARD_HAS_N_S_RGB_LED)
 add_subdirectory(rgbled)
 add_subdirectory(rgbled_ncp5623c)
+add_subdirectory(rgbled_is31fl3195)
 #add_subdirectory(rgbled_pwm) # requires board support (BOARD_HAS_LED_PWM/BOARD_HAS_UI_LED_PWM)

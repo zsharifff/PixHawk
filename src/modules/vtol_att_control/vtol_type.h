@@ -228,6 +228,11 @@ public:
 	float getMinimumFrontTransitionTime() const;
 
 	/**
+	 * @return Front transition timeout scaled for air density (if available) [s]
+	*/
+	float getFrontTransitionTimeout() const;
+
+	/**
 	* @return Minimum open-loop front transition time scaled for air density (if available) [s]
 	*/
 	float getOpenLoopFrontTransitionTime() const;
@@ -259,10 +264,10 @@ protected:
 	struct vehicle_attitude_setpoint_s *_fw_virtual_att_sp;	// virtual fw attitude setpoint
 	struct vehicle_control_mode_s		*_v_control_mode;	//vehicle control mode
 	struct vtol_vehicle_status_s 		*_vtol_vehicle_status;
-	struct actuator_controls_s			*_actuators_out_0;			//actuator controls going to the mc mixer
-	struct actuator_controls_s			*_actuators_out_1;			//actuator controls going to the fw mixer (used for elevons)
-	struct actuator_controls_s			*_actuators_mc_in;			//actuator controls from mc_rate_control
-	struct actuator_controls_s			*_actuators_fw_in;			//actuator controls from fw_att_control
+	struct vehicle_torque_setpoint_s 		*_vehicle_torque_setpoint_virtual_mc;
+	struct vehicle_torque_setpoint_s 		*_vehicle_torque_setpoint_virtual_fw;
+	struct vehicle_thrust_setpoint_s 		*_vehicle_thrust_setpoint_virtual_mc;
+	struct vehicle_thrust_setpoint_s 		*_vehicle_thrust_setpoint_virtual_fw;
 	struct vehicle_local_position_s			*_local_pos;
 	struct vehicle_local_position_setpoint_s	*_local_pos_sp;
 	struct airspeed_validated_s 			*_airspeed_validated;					// airspeed
@@ -324,7 +329,6 @@ protected:
 					(ParamFloat<px4::params::VT_B_TRANS_DUR>) _param_vt_b_trans_dur,
 					(ParamFloat<px4::params::VT_ARSP_TRANS>) _param_vt_arsp_trans,
 					(ParamFloat<px4::params::VT_F_TRANS_THR>) _param_vt_f_trans_thr,
-					(ParamFloat<px4::params::VT_B_TRANS_THR>) _param_vt_b_trans_thr,
 					(ParamFloat<px4::params::VT_ARSP_BLEND>) _param_vt_arsp_blend,
 					(ParamBool<px4::params::FW_ARSP_MODE>) _param_fw_arsp_mode,
 					(ParamFloat<px4::params::VT_TRANS_TIMEOUT>) _param_vt_trans_timeout,
