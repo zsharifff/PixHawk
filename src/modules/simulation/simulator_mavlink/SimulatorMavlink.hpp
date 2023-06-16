@@ -78,6 +78,8 @@
 #include <uORB/topics/vehicle_command_ack.h>
 #include <uORB/topics/rpm.h>
 
+#include <uORB/topics/aux_global_position.h>
+
 #include <random>
 
 #include <mavlink.h>
@@ -261,6 +263,8 @@ private:
 	uORB::PublicationMulti<sensor_gps_s>	*_sensor_gps_pubs[MAX_GPS] {};
 	uint8_t _gps_ids[MAX_GPS] {};
 	std::default_random_engine _gen{};
+
+	uORB::PublicationMulti<aux_global_position_s> _aux_global_position_pub{ORB_ID(aux_global_position)};
 
 	// uORB subscription handlers
 	int _actuator_outputs_sub{-1};
