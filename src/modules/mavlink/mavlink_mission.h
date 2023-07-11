@@ -133,8 +133,6 @@ private:
 
 	uORB::Publication<mission_s>	_offboard_mission_pub{ORB_ID(mission)};
 
-	static uint16_t		_geofence_update_counter;
-	static uint16_t		_safepoint_update_counter;
 	bool			_geofence_locked{false};		///< if true, we currently hold the dm_lock for the geofence (transaction in progress)
 
 	MavlinkRateLimiter	_slow_rate_limiter{100 * 1000};		///< Rate limit sending of the current WP sequence to 10 Hz
@@ -195,7 +193,8 @@ private:
 	 */
 	void send_mission_current(uint16_t seq);
 
-	void send_mission_count(uint8_t sysid, uint8_t compid, uint16_t count, MAV_MISSION_TYPE mission_type, uint32_t opaque_id);
+	void send_mission_count(uint8_t sysid, uint8_t compid, uint16_t count, MAV_MISSION_TYPE mission_type,
+				uint32_t opaque_id);
 
 	void send_mission_item(uint8_t sysid, uint8_t compid, uint16_t seq);
 

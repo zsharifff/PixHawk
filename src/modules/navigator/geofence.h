@@ -179,7 +179,7 @@ private:
 	uORB::SubscriptionData<vehicle_air_data_s> _sub_airdata;
 
 	int _outside_counter{0};
-	uint16_t _update_counter{0}; ///< dataman update counter: if it does not match, we polygon data was updated
+	uint16_t _opaque_id{0}; ///< dataman geofence id: if it does not match, the polygon data was updated
 
 	/**
 	 * implementation of updateFence(), but without locking

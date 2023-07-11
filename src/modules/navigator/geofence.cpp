@@ -40,8 +40,10 @@
  */
 #include "geofence.h"
 #include "navigator.h"
+#include "navigation.h"
 
 #include <ctype.h>
+#include <crc32.h>
 
 #include <dataman/dataman.h>
 #include <drivers/drv_hrt.h>
@@ -49,9 +51,28 @@
 #include <systemlib/mavlink_log.h>
 #include <px4_platform_common/events.h>
 
-#include "navigator.h"
-
 #define GEOFENCE_RANGE_WARNING_LIMIT 5000000
+
+static uint32_t crc32_for_fence_point(const mission_fence_point_s &fence_point, uint32_t prev_crc32)
+{
+	union {
+		CrcMissionItem_t item;
+		uint8_t raw[sizeof(CrcMissionItem_t)];
+	} u;
+
+	u.item.frame = fence_point.frame;
+	u.item.command = fence_point.nav_cmd;
+	u.item.autocontinue = 0U;
+	u.item.params[0] = 0.f;
+	u.item.params[1] = 0.f;
+	u.item.params[2] = 0.f;
+	u.item.params[3] = 0.f;
+	u.item.params[4] = static_cast<float>(fence_point.lat);
+	u.item.params[5] = static_cast<float>(fence_point.lon);
+	u.item.params[6] = fence_point.alt;
+
+	return crc32part(u.raw, sizeof(u), prev_crc32);
+}
 
 Geofence::Geofence(Navigator *navigator) :
 	ModuleParams(navigator),
@@ -93,7 +114,7 @@ void Geofence::_updateFence()
 
 	if (ret == sizeof(mission_stats_entry_s)) {
 		num_fence_items = stats.num_items;
-		_update_counter = stats.update_counter;
+		_opaque_id = stats.opaque_id;
 	}
 
 	// iterate over all polygons and store their starting vertices
@@ -316,7 +337,7 @@ bool Geofence::isInsidePolygonOrCircle(double lat, double lon, float altitude)
 	mission_stats_entry_s stats;
 	int ret = dm_read(DM_KEY_FENCE_POINTS, 0, &stats, sizeof(mission_stats_entry_s));
 
-	if (ret == sizeof(mission_stats_entry_s) && _update_counter != stats.update_counter) {
+	if (ret == sizeof(mission_stats_entry_s) && _opaque_id != stats.opaque_id) {
 		_updateFence();
 	}
 
@@ -556,6 +577,7 @@ Geofence::loadFromFile(const char *filename)
 		mavlink_log_info(_navigator->get_mavlink_log_pub(), "Geofence imported\t");
 		events::send(events::ID("navigator_geofence_imported"), events::Log::Info, "Geofence imported");
 		ret_val = PX4_OK;
+		uint32_t crc32{0U};
 
 		/* do a second pass, now that we know the number of vertices */
 		for (int seq = 1; seq <= pointCounter; ++seq) {
@@ -564,12 +586,14 @@ Geofence::loadFromFile(const char *filename)
 			if (dm_read(DM_KEY_FENCE_POINTS, seq, &mission_fence_point, sizeof(mission_fence_point_s)) ==
 			    sizeof(mission_fence_point_s)) {
 				mission_fence_point.vertex_count = pointCounter;
+				crc32 = crc32_for_fence_point(mission_fence_point, crc32);
 				dm_write(DM_KEY_FENCE_POINTS, seq, &mission_fence_point, sizeof(mission_fence_point_s));
 			}
 		}
 
 		mission_stats_entry_s stats;
 		stats.num_items = pointCounter;
+		stats.opaque_id = crc32;
 		ret_val = dm_write(DM_KEY_FENCE_POINTS, 0, &stats, sizeof(mission_stats_entry_s));
 
 	} else {

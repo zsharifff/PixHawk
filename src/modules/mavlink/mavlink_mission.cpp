@@ -64,18 +64,6 @@ uint32_t MavlinkMissionManager::_crc32[3] = { 0, 0, 0 };
 int32_t MavlinkMissionManager::_current_seq = 0;
 bool MavlinkMissionManager::_transfer_in_progress = false;
 constexpr uint16_t MavlinkMissionManager::MAX_COUNT[];
-uint16_t MavlinkMissionManager::_geofence_update_counter = 0;
-uint16_t MavlinkMissionManager::_safepoint_update_counter = 0;
-
-typedef struct __attribute__((packed)) CrcMissionItem {
-	uint8_t frame;
-	uint16_t command;
-	uint8_t autocontinue;
-	float params[7];
-} CrcMissionItem_t;
-
-static constexpr int MISSION_ITEM_CRC_SIZE = sizeof(CrcMissionItem_t);
-
 
 #define CHECK_SYSID_COMPID_MISSION(_msg)		(_msg.target_system == mavlink_system.sysid && \
 		((_msg.target_component == mavlink_system.compid) || \
@@ -86,7 +74,7 @@ uint32_t MavlinkMissionManager::crc32_for_mission_item(const mavlink_mission_ite
 {
 	union {
 		CrcMissionItem_t item;
-		uint8_t raw[MISSION_ITEM_CRC_SIZE];
+		uint8_t raw[sizeof(CrcMissionItem_t)];
 	} u;
 
 	u.item.frame = mission_item.frame;
@@ -158,7 +146,6 @@ MavlinkMissionManager::load_geofence_stats()
 	if (ret == sizeof(mission_stats_entry_s)) {
 		_count[MAV_MISSION_TYPE_FENCE] = stats.num_items;
 		_crc32[MAV_MISSION_TYPE_FENCE] = stats.opaque_id;
-		_geofence_update_counter = stats.update_counter;
 	}
 
 	return ret;
@@ -240,7 +227,6 @@ MavlinkMissionManager::update_geofence_count(unsigned count, uint32_t crc32)
 {
 	mission_stats_entry_s stats;
 	stats.num_items = count;
-	stats.update_counter = ++_geofence_update_counter; // this makes sure navigator will reload the fence data
 	stats.opaque_id = crc32;
 
 
@@ -270,7 +256,6 @@ MavlinkMissionManager::update_safepoint_count(unsigned count, uint32_t crc32)
 {
 	mission_stats_entry_s stats;
 	stats.num_items = count;
-	stats.update_counter = ++_safepoint_update_counter;
 	stats.opaque_id = crc32;
 
 	/* update stats in dataman */
@@ -324,7 +309,8 @@ MavlinkMissionManager::send_mission_current(uint16_t seq)
 }
 
 void
-MavlinkMissionManager::send_mission_count(uint8_t sysid, uint8_t compid, uint16_t count, MAV_MISSION_TYPE mission_type, uint32_t opaque_id)
+MavlinkMissionManager::send_mission_count(uint8_t sysid, uint8_t compid, uint16_t count, MAV_MISSION_TYPE mission_type,
+		uint32_t opaque_id)
 {
 	_time_last_sent = hrt_absolute_time();
 
@@ -737,7 +723,8 @@ MavlinkMissionManager::handle_mission_set_current(const mavlink_message_t *msg)
 			_time_last_recv = hrt_absolute_time();
 
 			if (wpc.seq < _count[MAV_MISSION_TYPE_MISSION]) {
-				if (update_active_mission(_dataman_id, _count[MAV_MISSION_TYPE_MISSION], wpc.seq, _crc32[MAV_MISSION_TYPE_MISSION]) == PX4_OK) {
+				if (update_active_mission(_dataman_id, _count[MAV_MISSION_TYPE_MISSION], wpc.seq,
+							  _crc32[MAV_MISSION_TYPE_MISSION]) == PX4_OK) {
 					PX4_DEBUG("WPM: MISSION_SET_CURRENT seq=%d OK", wpc.seq);
 
 				} else {
