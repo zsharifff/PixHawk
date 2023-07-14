@@ -83,6 +83,7 @@ set(msg_files
 	EstimatorStatus.msg
 	EstimatorStatusFlags.msg
 	Event.msg
+	figure_eight_status.msg
 	FailsafeFlags.msg
 	FailureDetectorStatus.msg
 	FollowTarget.msg
