@@ -1538,7 +1538,9 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("DEBUG_VECT", 1.0f);
 		configure_stream_local("NAMED_VALUE_FLOAT", 1.0f);
 		configure_stream_local("LINK_NODE_STATUS", 1.0f);
+#ifdef CONFIG_FIGURE_OF_EIGHT
 		configure_stream_local("FIGURE_EIGHT_EXECUTION_STATUS", 2.0f);
+#endif // CONFIG_FIGURE_OF_EIGHT
 #endif // !CONSTRAINED_FLASH
 
 		break;
@@ -1604,7 +1606,9 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("DEBUG_VECT", 10.0f);
 		configure_stream_local("NAMED_VALUE_FLOAT", 10.0f);
 		configure_stream_local("LINK_NODE_STATUS", 1.0f);
+#ifdef CONFIG_FIGURE_OF_EIGHT
 		configure_stream_local("FIGURE_EIGHT_EXECUTION_STATUS", 5.0f);
+#endif // CONFIG_FIGURE_OF_EIGHT
 #endif // !CONSTRAINED_FLASH
 
 		break;
@@ -1666,7 +1670,9 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("DEBUG_VECT", 1.0f);
 		configure_stream_local("NAMED_VALUE_FLOAT", 1.0f);
 		configure_stream_local("LINK_NODE_STATUS", 1.0f);
+#ifdef CONFIG_FIGURE_OF_EIGHT
 		configure_stream_local("FIGURE_EIGHT_EXECUTION_STATUS", 5.0f);
+#endif // CONFIG_FIGURE_OF_EIGHT
 #endif // !CONSTRAINED_FLASH
 
 		break;
@@ -1760,7 +1766,9 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("DEBUG_VECT", 50.0f);
 		configure_stream_local("NAMED_VALUE_FLOAT", 50.0f);
 		configure_stream_local("LINK_NODE_STATUS", 1.0f);
+#ifdef CONFIG_FIGURE_OF_EIGHT
 		configure_stream_local("FIGURE_EIGHT_EXECUTION_STATUS", 5.0f);
+#endif // CONFIG_FIGURE_OF_EIGHT
 #endif // !CONSTRAINED_FLASH
 
 		break;
@@ -1838,7 +1846,9 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 		configure_stream_local("DEBUG_FLOAT_ARRAY", 1.0f);
 		configure_stream_local("DEBUG_VECT", 1.0f);
 		configure_stream_local("NAMED_VALUE_FLOAT", 1.0f);
+#ifdef CONFIG_FIGURE_OF_EIGHT
 		configure_stream_local("FIGURE_EIGHT_EXECUTION_STATUS", 5.0f);
+#endif // CONFIG_FIGURE_OF_EIGHT
 #endif // !CONSTRAINED_FLASH
 		break;
 
