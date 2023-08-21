@@ -188,6 +188,8 @@ if($ENV{CLION_IDE})
 	add_definitions(-DPX4_DISABLE_GCC_POISON)
 endif()
 
+add_definitions(-DHEATSHRINK_DYNAMIC_ALLOC=0)
+
 if(${PX4_PLATFORM} STREQUAL "posix")
 	if(ENABLE_LOCKSTEP_SCHEDULER)
 		add_definitions(-DENABLE_LOCKSTEP_SCHEDULER)
