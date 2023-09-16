@@ -46,6 +46,8 @@ GZ_ADD_PLUGIN(
     gz::sim::System
 )
 
+GZ_ADD_PLUGIN_ALIAS(px4::sim::TopicRemap, "px4::sim::TopicRemap")
+
 using namespace px4::sim;
 
 TopicRemap::TopicRemap()
