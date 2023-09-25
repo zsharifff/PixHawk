@@ -253,7 +253,7 @@ class MavrosMissionTest(MavrosTestCommon):
         self.wait_for_mav_type(10)
 
         # push waypoints to FCU and start mission
-        self.send_wps(wps, 30)
+        self.send_wps(wps, 10)
         self.log_topic_vars()
         self.set_mode("AUTO.MISSION", 5)
         self.set_arm(True, 5)
