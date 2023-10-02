@@ -584,7 +584,7 @@
       <rotorVelocitySlowdownSim>10</rotorVelocitySlowdownSim>
       <motorType>velocity</motorType>
     </plugin>
-    <plugin filename="gz-sim-topic-remap-system" name="px4::sim::TopicRemap">
+    <plugin filename="libtopic_remap.so" name="px4::sim::TopicRemap">
     </plugin>
   </model>
 </sdf>
