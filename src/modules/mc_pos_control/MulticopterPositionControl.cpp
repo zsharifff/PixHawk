@@ -368,52 +368,86 @@ void MulticopterPositionControl::Run()
 			}
 		}
 
-		_trajectory_setpoint_sub.update(&_setpoint);
-
-		// adjust existing (or older) setpoint with any EKF reset deltas
-		if ((_setpoint.timestamp != 0) && (_setpoint.timestamp < vehicle_local_position.timestamp)) {
-			if (vehicle_local_position.vxy_reset_counter != _vxy_reset_counter) {
-				_setpoint.velocity[0] += vehicle_local_position.delta_vxy[0];
-				_setpoint.velocity[1] += vehicle_local_position.delta_vxy[1];
-			}
-
-			if (vehicle_local_position.vz_reset_counter != _vz_reset_counter) {
-				_setpoint.velocity[2] += vehicle_local_position.delta_vz;
-			}
-
-			if (vehicle_local_position.xy_reset_counter != _xy_reset_counter) {
-				_setpoint.position[0] += vehicle_local_position.delta_xy[0];
-				_setpoint.position[1] += vehicle_local_position.delta_xy[1];
-			}
-
-			if (vehicle_local_position.z_reset_counter != _z_reset_counter) {
-				_setpoint.position[2] += vehicle_local_position.delta_z;
-			}
-
-			if (vehicle_local_position.heading_reset_counter != _heading_reset_counter) {
-				_setpoint.yaw = wrap_pi(_setpoint.yaw + vehicle_local_position.delta_heading);
-			}
-		}
-
-		if (vehicle_local_position.vxy_reset_counter != _vxy_reset_counter) {
-			_vel_x_deriv.reset();
-			_vel_y_deriv.reset();
-		}
-
-		if (vehicle_local_position.vz_reset_counter != _vz_reset_counter) {
-			_vel_z_deriv.reset();
-		}
-
-		// save latest reset counters
-		_vxy_reset_counter = vehicle_local_position.vxy_reset_counter;
-		_vz_reset_counter = vehicle_local_position.vz_reset_counter;
-		_xy_reset_counter = vehicle_local_position.xy_reset_counter;
-		_z_reset_counter = vehicle_local_position.z_reset_counter;
-		_heading_reset_counter = vehicle_local_position.heading_reset_counter;
-
-
 		PositionControlStates states{set_vehicle_states(vehicle_local_position)};
 
+		_trajectory_setpoint_sub.update(&_setpoint);
+
+		const bool last_flag_control_heading = _position_heading_setpoint.flag_control_heading;
+		const hrt_abstime last_position_heading_timestamp = _position_heading_setpoint.timestamp;
+		_position_heading_setpoint_sub.update(&_position_heading_setpoint);
+
+		if ((_position_heading_setpoint.timestamp != 0)
+		    && (_position_heading_setpoint.timestamp >= _time_position_control_enabled)
+		    && (hrt_elapsed_time(&last_position_heading_timestamp) < 200_ms)
+		    && _vehicle_control_mode.flag_multicopter_position_control_enabled) {
+			// take position heading setpoint as priority over trajectory setpoint
+			// TODO: move all this into a method and/or class
+
+			_setpoint = PositionControl::empty_trajectory_setpoint;
+
+			const Vector3f position_setpoint(_position_heading_setpoint.position);
+
+			if (states.position.isAllFinite() && position_setpoint.isAllFinite()) {
+
+				// TODO: need to decide on timeout logic
+				// TODO: better switch and initialization handling
+
+				if (_last_active_setpoint_interface == SetpointInterface::kTrajectory) {
+					const Vector3f initial_acceleration{};
+					const Vector3f initial_velocity{};
+					_position_smoother.reset(initial_acceleration, initial_velocity, states.position);
+				}
+
+				setPositionSmootherLimits(_position_heading_setpoint);
+
+				const Vector3f feedforward_velocity{};
+				const bool force_zero_velocity_setpoint = false;
+				PositionSmoothing::PositionSmoothingSetpoints out_setpoints;
+				_position_smoother.generateSetpoints(states.position, position_setpoint, feedforward_velocity, dt,
+								     force_zero_velocity_setpoint, out_setpoints);
+
+				_position_smoother.getCurrentPosition().copyTo(_setpoint.position);
+				_position_smoother.getCurrentVelocity().copyTo(_setpoint.velocity);
+				_position_smoother.getCurrentAcceleration().copyTo(_setpoint.acceleration);
+				out_setpoints.jerk.copyTo(_setpoint.jerk);
+
+				_setpoint.yaw = NAN;
+				_setpoint.yawspeed = NAN;
+
+				if (_position_heading_setpoint.flag_control_heading && PX4_ISFINITE(_position_heading_setpoint.heading)
+				    && PX4_ISFINITE(states.yaw)) {
+
+					if (_last_active_setpoint_interface == SetpointInterface::kTrajectory || !last_flag_control_heading) {
+						const float initial_heading_rate{0.f};
+						_heading_smoother.reset(states.yaw, initial_heading_rate);
+					}
+
+					setHeadingSmootherLimits(_position_heading_setpoint);
+					_heading_smoother.update(_position_heading_setpoint.heading, dt);
+
+					_setpoint.yaw = _heading_smoother.getSmoothedHeading();
+					_setpoint.yawspeed = _heading_smoother.getSmoothedHeadingRate();
+				}
+
+				_setpoint.timestamp = _position_heading_setpoint.timestamp;
+
+				_last_active_setpoint_interface = SetpointInterface::kLocalPositionHeading;
+			}
+
+			// for logging
+			_trajectory_setpoint_pub.publish(_setpoint);
+
+			_vehicle_constraints.timestamp = hrt_absolute_time();
+			_vehicle_constraints.want_takeoff = false;
+			_vehicle_constraints.speed_up = _param_mpc_z_vel_max_up.get();
+			_vehicle_constraints.speed_down = _param_mpc_z_vel_max_dn.get();
+
+		} else {
+			_last_active_setpoint_interface = SetpointInterface::kTrajectory;
+			_vehicle_constraints_sub.update(&_vehicle_constraints);
+		}
+
+		adjustSetpointForEKFResets(vehicle_local_position, _setpoint);
 
 		if (_vehicle_control_mode.flag_multicopter_position_control_enabled) {
 			// set failsafe setpoint if there hasn't been a new
@@ -427,9 +461,6 @@ void MulticopterPositionControl::Run()
 
 		if (_vehicle_control_mode.flag_multicopter_position_control_enabled
 		    && (_setpoint.timestamp >= _time_position_control_enabled)) {
-
-			// update vehicle constraints and handle smooth takeoff
-			_vehicle_constraints_sub.update(&_vehicle_constraints);
 
 			// fix to prevent the takeoff ramp to ramp to a too high value or get stuck because of NAN
 			// TODO: this should get obsolete once the takeoff limiting moves into the flight tasks
@@ -630,6 +661,132 @@ trajectory_setpoint_s MulticopterPositionControl::generateFailsafeSetpoint(const
 	}
 
 	return failsafe_setpoint;
+}
+
+void MulticopterPositionControl::adjustSetpointForEKFResets(const vehicle_local_position_s &vehicle_local_position,
+		trajectory_setpoint_s &setpoint)
+{
+	if ((setpoint.timestamp != 0) && (setpoint.timestamp < vehicle_local_position.timestamp)) {
+		if (vehicle_local_position.vxy_reset_counter != _vxy_reset_counter) {
+			setpoint.velocity[0] += vehicle_local_position.delta_vxy[0];
+			setpoint.velocity[1] += vehicle_local_position.delta_vxy[1];
+		}
+
+		if (vehicle_local_position.vz_reset_counter != _vz_reset_counter) {
+			setpoint.velocity[2] += vehicle_local_position.delta_vz;
+		}
+
+		if (vehicle_local_position.xy_reset_counter != _xy_reset_counter) {
+			setpoint.position[0] += vehicle_local_position.delta_xy[0];
+			setpoint.position[1] += vehicle_local_position.delta_xy[1];
+		}
+
+		if (vehicle_local_position.z_reset_counter != _z_reset_counter) {
+			setpoint.position[2] += vehicle_local_position.delta_z;
+		}
+
+		if (vehicle_local_position.heading_reset_counter != _heading_reset_counter) {
+			setpoint.yaw = wrap_pi(setpoint.yaw + vehicle_local_position.delta_heading);
+		}
+	}
+
+	if (vehicle_local_position.vxy_reset_counter != _vxy_reset_counter) {
+		_vel_x_deriv.reset();
+		_vel_y_deriv.reset();
+	}
+
+	if (vehicle_local_position.vz_reset_counter != _vz_reset_counter) {
+		_vel_z_deriv.reset();
+	}
+
+	// save latest reset counters
+	_vxy_reset_counter = vehicle_local_position.vxy_reset_counter;
+	_vz_reset_counter = vehicle_local_position.vz_reset_counter;
+	_xy_reset_counter = vehicle_local_position.xy_reset_counter;
+	_z_reset_counter = vehicle_local_position.z_reset_counter;
+	_heading_reset_counter = vehicle_local_position.heading_reset_counter;
+}
+
+void MulticopterPositionControl::setPositionSmootherLimits(const position_heading_setpoint_s
+		&position_heading_setpoint)
+{
+	// constrain horizontal velocity
+	float max_horizontal_speed = _param_mpc_xy_cruise.get();
+	float max_horizontal_accel = _param_mpc_acc_hor.get();
+
+	if (position_heading_setpoint.flag_set_max_horizontal_speed
+	    && PX4_ISFINITE(position_heading_setpoint.max_horizontal_speed)) {
+		max_horizontal_speed = math::constrain(position_heading_setpoint.max_horizontal_speed, 0.f, _param_mpc_xy_cruise.get());
+
+		// linearly scale horizontal acceleration limit with horizontal speed limit to maintain smoothing dynamic
+		// only limit acceleration once within velocity constraints
+		if (_position_smoother.getCurrentVelocityXY().norm() <= max_horizontal_speed) {
+			const float speed_scale = max_horizontal_speed / _param_mpc_xy_cruise.get();
+			max_horizontal_accel = math::constrain(_param_mpc_acc_hor.get() * speed_scale, VelocitySmoothing::kMinAccel,
+							       _param_mpc_acc_hor.get());
+		}
+	}
+
+	_position_smoother.setCruiseSpeed(max_horizontal_speed);
+	_position_smoother.setMaxVelocityXY(max_horizontal_speed);
+	_position_smoother.setMaxAccelerationXY(max_horizontal_accel);
+
+	// constrain vertical velocity
+	const bool pos_setpoint_is_below_smooth_pos = position_heading_setpoint.position[2] -
+			_position_smoother.getCurrentPositionZ() > 0.f;
+	const float vehicle_max_vertical_speed = (pos_setpoint_is_below_smooth_pos) ? _param_mpc_z_v_auto_dn.get() :
+			_param_mpc_z_v_auto_up.get();
+	const float vehicle_max_vertical_accel = (pos_setpoint_is_below_smooth_pos) ? _param_mpc_acc_down_max.get() :
+			_param_mpc_acc_up_max.get();
+
+	float max_vertical_speed = vehicle_max_vertical_speed;
+	float max_vertical_accel = vehicle_max_vertical_accel;
+
+	if (position_heading_setpoint.flag_set_max_vertical_speed
+	    && PX4_ISFINITE(position_heading_setpoint.max_vertical_speed)) {
+
+		max_vertical_speed = math::constrain(position_heading_setpoint.max_vertical_speed, 0.f, vehicle_max_vertical_speed);
+
+		// linearly scale vertical acceleration limit with vertical speed limit to maintain smoothing dynamic
+		// only limit acceleration once within velocity constraints
+		if (fabsf(_position_smoother.getCurrentVelocityZ()) <= max_vertical_speed) {
+			const float speed_scale = max_vertical_speed / vehicle_max_vertical_speed;
+			max_vertical_accel = math::constrain(vehicle_max_vertical_accel * speed_scale, VelocitySmoothing::kMinAccel,
+							     vehicle_max_vertical_accel);
+		}
+	}
+
+	_position_smoother.setMaxVelocityZ(max_vertical_speed);
+	_position_smoother.setMaxAccelerationZ(max_vertical_accel);
+
+	// TODO: could potentially move these somewhere that's only set on construction (or close to it) as they arent variable
+	_position_smoother.setMaxJerkXY(_param_mpc_jerk_auto.get());
+	_position_smoother.setMaxJerkZ(_param_mpc_jerk_auto.get());
+	_position_smoother.setMaxAllowedHorizontalError(_param_mpc_xy_err_max.get());
+}
+
+void MulticopterPositionControl::setHeadingSmootherLimits(const position_heading_setpoint_s
+		&position_heading_setpoint)
+{
+	float max_heading_rate =  _param_mpc_yawrauto_max.get();
+	float max_heading_accel = _param_mpc_yawaauto_max.get();
+
+	if (position_heading_setpoint.flag_set_max_heading_rate && PX4_ISFINITE(position_heading_setpoint.max_heading_rate)) {
+		max_heading_rate = math::constrain(position_heading_setpoint.max_heading_rate, HeadingSmoother::kMinHeadingRate,
+						   _param_mpc_yawrauto_max.get());
+
+		// linearly scale heading acceleration limit with heading rate limit to maintain smoothing dynamic
+		// only limit acceleration once within velocity constraints
+		if (fabsf(_heading_smoother.getSmoothedHeadingRate()) <= max_heading_rate) {
+			const float rate_scale = max_heading_rate / _param_mpc_yawrauto_max.get();
+			max_heading_accel = math::constrain(_param_mpc_yawaauto_max.get() * rate_scale, HeadingSmoother::kMinHeadingAccel,
+							    _param_mpc_yawaauto_max.get());
+		}
+	}
+
+	_heading_smoother.setMaxHeadingRate(max_heading_rate);
+	_heading_smoother.setMaxHeadingAccel(max_heading_accel);
+
 }
 
 int MulticopterPositionControl::task_spawn(int argc, char *argv[])
