@@ -37,11 +37,14 @@
 #include <px4_platform_common/app.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/module_params.h>
+#include <px4_platform_common/i2c_spi_buses.h>
 #include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
+
 #include <px4_arch/i2c_hw_description.h>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_status.h>
+#include <drivers/drv_sensor.h>
 
 using namespace time_literals;
 
@@ -64,17 +67,14 @@ private:
 	struct I2CDevice {
 		const char *cmd;
 		uint8_t i2c_addr;
+		uint8_t devid_driver_index;
 	};
 
 	static constexpr I2CDevice _devices[] = {
-		{"ina226", 0x41},
-		{"ina228", 0x45},
-		{"ina238", 0x45},
+		{"ina226", 0x41, DRV_POWER_DEVTYPE_INA226},
+		{"ina228", 0x45, DRV_POWER_DEVTYPE_INA228},
+		{"ina238", 0x45, DRV_POWER_DEVTYPE_INA238},
 	};
-
-	static constexpr unsigned num_devices = sizeof(_devices) / sizeof(_devices[0]);
-
-	bool _started[I2C_BUS_MAX_BUS_ITEMS][num_devices] = {};
 
 	void Run() override;
 	void scan_i2c_bus(int bus);

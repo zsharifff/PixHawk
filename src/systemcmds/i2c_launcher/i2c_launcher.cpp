@@ -103,7 +103,31 @@ void I2CLauncher::scan_i2c_bus(int bus)
 
 	for (unsigned i = 0; i < sizeof(_devices) / sizeof(_devices[0]); ++i) {
 
-		if (_started[bus][i]) {
+		bool running = false;
+		{
+			// We need to check whether any of the devices with the same I2C address are already running,
+			// because even if they are not running, we could not address.
+			for (unsigned j = 0; j < sizeof(_devices) / sizeof(_devices[0]); ++j) {
+
+				if (_devices[i].i2c_addr != _devices[j].i2c_addr) {
+					continue;
+				}
+
+				BusCLIArguments bus_cli_arguments{true, false};
+				bus_cli_arguments.bus_option = I2CSPIBusOption::I2CExternal;
+				BusInstanceIterator i2c_bus_instance_iterator {
+					_devices[j].cmd, bus_cli_arguments, _devices[j].devid_driver_index};
+
+				while (i2c_bus_instance_iterator.next()) {
+					if (i2c_bus_instance_iterator.runningInstancesCount() > 0) {
+						running = true;
+						break;
+					}
+				}
+			}
+		}
+
+		if (running) {
 			continue;
 		}
 
@@ -148,14 +172,6 @@ void I2CLauncher::scan_i2c_bus(int bus)
 			const int ret = system(buf);
 
 			if (ret == 0) {
-				// Mark all devices with that address as started, at least for this bus
-				// because even if there were more, we could not address them.
-				for (unsigned j = 0; j < num_devices; ++j) {
-					if (_devices[j].i2c_addr == _devices[i].i2c_addr) {
-						_started[bus][j] = true;
-					}
-				}
-
 				PX4_INFO("Started 0x%x successfully", _devices[i].i2c_addr);
 
 			} else {
