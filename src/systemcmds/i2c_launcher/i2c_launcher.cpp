@@ -35,13 +35,15 @@
 #include "i2c_launcher.hpp"
 #include <px4_platform_common/time.h>
 #include <px4_platform_common/log.h>
+#include <px4_platform_common/getopt.h>
 #include <px4_arch/i2c_hw_description.h>
 
 constexpr I2CLauncher::I2CDevice I2CLauncher::_devices[];
 
-I2CLauncher::I2CLauncher() :
+I2CLauncher::I2CLauncher(int bus) :
 	ModuleParams(nullptr),
-	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::lp_default)
+	ScheduledWorkItem(MODULE_NAME, px4::device_bus_to_wq(bus)),
+	_bus(bus)
 {
 }
 
@@ -85,11 +87,7 @@ void I2CLauncher::Run()
 		return;
 	}
 
-	I2CBusIterator i2c_bus_iterator {I2CBusIterator::FilterType::ExternalBus};
-
-	while (i2c_bus_iterator.next()) {
-		scan_i2c_bus(i2c_bus_iterator.bus().bus);
-	}
+	scan_i2c_bus(_bus);
 }
 
 void I2CLauncher::scan_i2c_bus(int bus)
@@ -119,6 +117,10 @@ void I2CLauncher::scan_i2c_bus(int bus)
 					_devices[j].cmd, bus_cli_arguments, _devices[j].devid_driver_index};
 
 				while (i2c_bus_instance_iterator.next()) {
+					if (i2c_bus_instance_iterator.bus() != bus) {
+						continue;
+					}
+
 					if (i2c_bus_instance_iterator.runningInstancesCount() > 0) {
 						running = true;
 						break;
@@ -183,29 +185,6 @@ void I2CLauncher::scan_i2c_bus(int bus)
 	px4_i2cbus_uninitialize(i2c_dev);
 }
 
-int I2CLauncher::task_spawn(int argc, char *argv[])
-{
-	I2CLauncher *instance = new I2CLauncher();
-
-	if (instance) {
-		_object.store(instance);
-		_task_id = task_id_is_work_queue;
-
-		if (instance->init()) {
-			return PX4_OK;
-		}
-
-	} else {
-		PX4_ERR("alloc failed");
-	}
-
-	delete instance;
-	_object.store(nullptr);
-	_task_id = -1;
-
-	return PX4_ERROR;
-}
-
 int I2CLauncher::custom_command(int argc, char *argv[])
 {
 	return print_usage("unknown command");
@@ -226,6 +205,7 @@ Daemon that starts drivers based on found I2C devices.
 
 	PRINT_MODULE_USAGE_NAME("i2c_launcher", "system");
 	PRINT_MODULE_USAGE_COMMAND("start");
+	PRINT_MODULE_USAGE_PARAM_INT('b', 0, 1, 4, "Bus number", false);
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;
@@ -233,5 +213,62 @@ Daemon that starts drivers based on found I2C devices.
 
 extern "C" __EXPORT int i2c_launcher_main(int argc, char *argv[])
 {
-	return I2CLauncher::main(argc, argv);
+	using ThisDriver = I2CLauncher;
+
+	static I2CLauncher* instances[I2C_BUS_MAX_BUS_ITEMS];
+	int bus = -1;
+	int myoptind = 1;
+	int ch;
+	const char *myoptarg = nullptr;
+
+	const char *verb = argv[1];
+
+	while ((ch = px4_getopt(argc, argv, "b:", &myoptind, &myoptarg)) != EOF) {
+		switch (ch) {
+		case 'b':
+			bus = strtol(myoptarg, nullptr, 10);
+			break;
+
+		default:
+			return ThisDriver::print_usage("unrecognized flag");
+		}
+	}
+
+	if (bus == -1) {
+		PX4_ERR("bus not set");
+		return PX4_ERROR;
+	}
+
+	if (bus > I2C_BUS_MAX_BUS_ITEMS) {
+		PX4_ERR("bus out of bound");
+		return PX4_ERROR;
+	}
+
+
+	if (!verb) {
+		ThisDriver::print_usage();
+		return -1;
+	}
+
+	if (strcmp(verb, "start") == 0) {
+
+		instances[bus] = new I2CLauncher(bus);
+
+		if (instances[bus]) {
+
+			if (instances[bus]->init()) {
+				return PX4_OK;
+			}
+
+		} else {
+			PX4_ERR("alloc failed");
+		}
+
+		delete instances[bus];
+
+		return PX4_ERROR;
+	}
+
+	ThisDriver::print_usage();
+	return -1;
 }

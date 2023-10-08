@@ -51,7 +51,7 @@ using namespace time_literals;
 class I2CLauncher : public ModuleBase<I2CLauncher>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
-	I2CLauncher();
+	I2CLauncher(int bus);
 
 	~I2CLauncher() override;
 
@@ -77,10 +77,12 @@ private:
 	};
 
 	void Run() override;
-	void scan_i2c_bus(int bus);
+
+	static void scan_i2c_bus(int bus);
 
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};          // regular subscription for additional data
 
+	int _bus;
 	bool _armed {false};
 };
