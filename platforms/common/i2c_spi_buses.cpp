@@ -384,7 +384,7 @@ int BusInstanceIterator::runningInstancesCount() const
 	int num_instances = 0;
 
 	for (const auto &modules : i2c_spi_module_instances) {
-		if (strcmp(modules->_module_name, _module_name) == 0) {
+		if (modules->_bus == bus() && strcmp(modules->_module_name, _module_name) == 0) {
 			++num_instances;
 		}
 	}
