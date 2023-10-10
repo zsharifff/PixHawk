@@ -104,7 +104,7 @@ void I2CLauncher::scan_i2c_bus(int bus)
 		bool running = false;
 		{
 			// We need to check whether any of the devices with the same I2C address are already running,
-			// because even if they are not running, we could not address.
+			// because even if they are not running, we could not address them.
 			for (unsigned j = 0; j < sizeof(_devices) / sizeof(_devices[0]); ++j) {
 
 				if (_devices[i].i2c_addr != _devices[j].i2c_addr) {
@@ -113,14 +113,12 @@ void I2CLauncher::scan_i2c_bus(int bus)
 
 				BusCLIArguments bus_cli_arguments{true, false};
 				bus_cli_arguments.bus_option = I2CSPIBusOption::I2CExternal;
+				bus_cli_arguments.requested_bus = bus;
+
 				BusInstanceIterator i2c_bus_instance_iterator {
 					_devices[j].cmd, bus_cli_arguments, _devices[j].devid_driver_index};
 
 				while (i2c_bus_instance_iterator.next()) {
-					if (i2c_bus_instance_iterator.bus() != bus) {
-						continue;
-					}
-
 					if (i2c_bus_instance_iterator.runningInstancesCount() > 0) {
 						running = true;
 						break;
