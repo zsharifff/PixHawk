@@ -31,21 +31,25 @@
  *
  ****************************************************************************/
 
-/**
- * @file zero_gyro_update.cpp
- * Control function for ekf zero gyro update
- */
+#include "ZeroGyroUpdate.hpp"
 
-#include "ekf.h"
+#include "../ekf.h"
 
-void Ekf::controlZeroGyroUpdate(const imuSample &imu_delayed)
+ZeroGyroUpdate::ZeroGyroUpdate()
 {
-	if (!(_params.imu_ctrl & static_cast<int32_t>(ImuCtrl::GyroBias))) {
-		return;
-	}
+	reset();
+}
 
+void ZeroGyroUpdate::reset()
+{
+	_zgup_delta_ang.setZero();
+	_zgup_delta_ang_dt = 0.f;
+}
+
+bool ZeroGyroUpdate::update(Ekf &ekf, const estimator::imuSample &imu_delayed)
+{
 	// When at rest, fuse the gyro data as a direct observation of the gyro bias
-	if (_control_status.flags.vehicle_at_rest) {
+	if (ekf.control_status_flags().vehicle_at_rest) {
 		// Downsample gyro data to run the fusion at a lower rate
 		_zgup_delta_ang += imu_delayed.delta_ang;
 		_zgup_delta_ang_dt += imu_delayed.delta_ang_dt;
@@ -54,38 +58,38 @@ void Ekf::controlZeroGyroUpdate(const imuSample &imu_delayed)
 		const bool zero_gyro_update_data_ready = _zgup_delta_ang_dt >= zgup_dt;
 
 		if (zero_gyro_update_data_ready) {
+
 			Vector3f gyro_bias = _zgup_delta_ang / _zgup_delta_ang_dt;
-			Vector3f innovation = _state.gyro_bias - gyro_bias;
+			Vector3f innovation = ekf.state().gyro_bias - gyro_bias;
 
-			const float obs_var = sq(math::constrain(_params.gyro_noise, 0.f, 1.f));
+			const float obs_var = sq(math::constrain(ekf.getGyroNoise(), 0.f, 1.f));
 
-			const Vector3f innov_var = getGyroBiasVariance() + obs_var;
+			const Vector3f innov_var = ekf.getGyroBiasVariance() + obs_var;
 
 			for (int i = 0; i < 3; i++) {
-				fuseDeltaAngBias(innovation(i), innov_var(i), i);
+				Ekf::VectorState K;  // Kalman gain vector for any single observation - sequential fusion is used.
+				const unsigned state_index = State::gyro_bias.idx + i;
+
+				// calculate kalman gain K = PHS, where S = 1/innovation variance
+				for (int row = 0; row < State::size; row++) {
+					K(row) = ekf.covariance(row, state_index) / innov_var(i);
+				}
+
+				ekf.measurementUpdate(K, innov_var(i), innovation(i));
 			}
 
 			// Reset the integrators
 			_zgup_delta_ang.setZero();
 			_zgup_delta_ang_dt = 0.f;
+
+			return true;
 		}
 
-	} else if (_control_status_prev.flags.vehicle_at_rest) {
+	} else if (ekf.control_status_prev_flags().vehicle_at_rest) {
 		// Reset the integrators
 		_zgup_delta_ang.setZero();
 		_zgup_delta_ang_dt = 0.f;
 	}
-}
 
-void Ekf::fuseDeltaAngBias(const float innov, const float innov_var, const int obs_index)
-{
-	VectorState K;  // Kalman gain vector for any single observation - sequential fusion is used.
-	const unsigned state_index = obs_index + State::gyro_bias.idx;
-
-	// calculate kalman gain K = PHS, where S = 1/innovation variance
-	for (int row = 0; row < State::size; row++) {
-		K(row) = P(row, state_index) / innov_var;
-	}
-
-	measurementUpdate(K, innov_var, innov);
+	return false;
 }
