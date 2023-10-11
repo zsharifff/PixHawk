@@ -50,7 +50,8 @@ list(APPEND EKF_SRCS
 	yaw_fusion.cpp
 	zero_innovation_heading_update.cpp
 	zero_gyro_update.cpp
-	zero_velocity_update.cpp
+
+	aid_sources/ZeroVelocityUpdate.cpp
 )
 
 if(CONFIG_EKF2_AIRSPEED)
